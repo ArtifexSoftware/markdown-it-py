@@ -24,6 +24,83 @@
  * ------------------------------------------------------------------- */
 static bool char_is_space(unsigned char c) { return c == ' ' || c == '\t'; }
 
+/* GitHub-style alert kinds recognised by the `alerts` extension —
+ * mirrors `_ALERT_TYPES` in markdown_it/rules_block/blockquote.py.
+ * Order matters only insofar as the labels are checked left-to-right;
+ * upstream uses a set so order is irrelevant — we match the upstream
+ * order for readability. */
+static const struct {
+    const char *name;
+    size_t      len;
+    const char *capitalised; /* `name.capitalize()` (Python semantics) */
+} g_alert_kinds[] = {
+    { "NOTE",      4, "Note"      },
+    { "TIP",       3, "Tip"       },
+    { "IMPORTANT", 9, "Important" },
+    { "WARNING",   7, "Warning"   },
+    { "CAUTION",   7, "Caution"   },
+};
+
+/* Detect `[!KIND]` on a single source line *line_start..line_end*.
+ * Returns the matching index in `g_alert_kinds` (>= 0), or -1 for no
+ * match. Mirrors `_detect_alert` in
+ * markdown_it/rules_block/blockquote.py: upstream trims trailing
+ * whitespace, then requires an opening `[!`, a closing `]`, and a body
+ * that *case-insensitively* matches one of the recognised kinds. */
+static int detect_alert(const char *src, int32_t pos, int32_t maximum)
+{
+    while (maximum > pos &&
+           (src[maximum - 1] == ' ' || src[maximum - 1] == '\t')) {
+        --maximum;
+    }
+    if (maximum - pos < 4) return -1;
+    if (src[pos] != '[' || src[pos + 1] != '!') return -1;
+    if (src[maximum - 1] != ']') return -1;
+    const char *body     = src + pos + 2;
+    int32_t     body_len = (maximum - 1) - (pos + 2);
+    if (body_len <= 0) return -1;
+
+    for (size_t i = 0; i < sizeof g_alert_kinds / sizeof *g_alert_kinds; ++i) {
+        if ((int32_t)g_alert_kinds[i].len != body_len) continue;
+        bool match = true;
+        for (int32_t j = 0; j < body_len; ++j) {
+            char a = body[j];
+            char b = g_alert_kinds[i].name[j];
+            /* ASCII upper-case fold; matches Python's str.upper() for
+             * the ASCII letters that make up our kind names. */
+            if (a >= 'a' && a <= 'z') a = (char)(a - 32);
+            if (a != b) { match = false; break; }
+        }
+        if (match) return (int)i;
+    }
+    return -1;
+}
+
+/* GFM task checkbox detector — mirrors `_detect_task_checkbox` in
+ * markdown_it/rules_block/list.py. Returns -1 for "no match", 0 for an
+ * unchecked `[ ]`, or 1 for a checked `[x]`/`[X]`. The trailing
+ * whitespace requirement (` ` or `\t`) is part of the contract — the
+ * caller can safely advance by exactly 4 bytes when the result is
+ * non-negative. */
+static int detect_task_checkbox(const char *src, int32_t pos, int32_t maximum)
+{
+    if (pos + 4 > maximum) return -1;
+    if (src[pos] != '[') return -1;
+    char inner = src[pos + 1];
+    if (src[pos + 2] != ']') return -1;
+    int checked;
+    if (inner == ' ') {
+        checked = 0;
+    } else if (inner == 'x' || inner == 'X') {
+        checked = 1;
+    } else {
+        return -1;
+    }
+    char after = src[pos + 3];
+    if (after != ' ' && after != '\t') return -1;
+    return checked;
+}
+
 /* Allocate a fresh copy of `data[0..n)` in the arena. */
 static mdit_str arena_copy_str(mdit_arena *a, const char *data, size_t n)
 {
@@ -624,6 +701,24 @@ static bool block_list(mdit_state_block *state)
                 (size_t)(pos_after_marker - 1 - marker_start));
         }
 
+        /* GFM task checkbox detection — mirrors upstream's `tasklists`
+         * option. We stamp `meta["checked"]` on the list_item_open
+         * token and advance bMarks past the checkbox so the inner
+         * tokenize doesn't see it. The post-list pass below adds the
+         * `task-list-item` / `contains-task-list` classes. */
+        int     checkbox_len = 0;
+        if (state->md->options.tasklists && content_start < maximum) {
+            int chk = detect_task_checkbox(state->src.data,
+                                           content_start, maximum);
+            if (chk >= 0) {
+                /* Use meta map (not attrs) — upstream stores `checked`
+                 * here so the renderer can branch on it. */
+                (void)mdit_map_set_z(&li->meta, "checked",
+                                     mdit_value_bool(chk == 1));
+                checkbox_len = 4;
+            }
+        }
+
         bool    old_tight    = state->tight;
         int32_t old_b_mark   = state->bMarks[startLine];
         int32_t old_t_shift  = state->tShift[startLine];
@@ -635,6 +730,11 @@ static bool block_list(mdit_state_block *state)
         state->tight      = true;
         state->tShift[startLine] = content_start - state->bMarks[startLine];
         state->sCount[startLine] = offset;
+
+        if (checkbox_len) {
+            state->bMarks[startLine] = content_start + checkbox_len;
+            state->tShift[startLine] = 0;
+        }
 
         if (content_start >= maximum &&
             mdit_state_block_is_empty(state, startLine + 1)) {
@@ -694,6 +794,30 @@ static bool block_list(mdit_state_block *state)
             if (pos_after_marker < 0) break;
         }
         if (marker_char != state->src.data[pos_after_marker - 1]) break;
+    }
+
+    /* Tasklists: walk the immediate-child `list_item_open` tokens, and
+     * if any carry `meta["checked"]`, stamp `task-list-item` on them
+     * and `contains-task-list` on the outer `*_list_open` token. The
+     * level check matches upstream — only items directly under this
+     * list, not nested-list items, get the classes. */
+    if (state->md->options.tasklists) {
+        bool contains_task = false;
+        int32_t list_level = state->tokens->data[list_tok_idx].level;
+        for (size_t j = list_tok_idx + 1; j < state->tokens->len; ++j) {
+            mdit_token *tk = &state->tokens->data[j];
+            if (tk->level != list_level + 1) continue;
+            if (!mdit_str_eq_z(tk->type, "list_item_open")) continue;
+            if (mdit_map_get_z(&tk->meta, "checked") == NULL) continue;
+            (void)mdit_token_attr_join(tk, MDIT_STR_LIT("class"),
+                                       MDIT_STR_LIT("task-list-item"));
+            contains_task = true;
+        }
+        if (contains_task) {
+            (void)mdit_token_attr_join(&state->tokens->data[list_tok_idx],
+                                       MDIT_STR_LIT("class"),
+                                       MDIT_STR_LIT("contains-task-list"));
+        }
     }
 
     mdit_token *close = mdit_state_block_push(state,
@@ -897,19 +1021,100 @@ static bool block_blockquote(mdit_state_block *state)
     int32_t oldIndent = state->blkIndent;
     state->blkIndent = 0;
 
+    /* GitHub-style alert detection: when `options.alerts` is on and
+     * the blockquote has at least one content line beyond the marker
+     * line, peek for `[!NOTE]` / `[!TIP]` / etc. on the first content
+     * line. If matched, emit alert tokens (`alert_open` / title / body
+     * / `alert_close`) instead of `blockquote_open`/`_close`. Skip the
+     * marker line during inner tokenisation so the alert kind doesn't
+     * appear as paragraph text. */
+    int alert_kind = -1;
+    if (state->md->options.alerts && nextLine > startLine) {
+        int32_t a_pos = state->bMarks[startLine] + state->tShift[startLine];
+        int32_t a_max = state->eMarks[startLine];
+        if (a_pos < a_max) {
+            alert_kind = detect_alert(state->src.data, a_pos, a_max);
+        }
+    }
+
     size_t open_idx = state->tokens->len;
-    mdit_token *open = mdit_state_block_push(state,
-        MDIT_STR_LIT("blockquote_open"), MDIT_STR_LIT("blockquote"), 1);
-    if (open == NULL) goto restore;
-    open->markup = MDIT_STR_LIT(">");
-    mdit_token_set_map(open, startLine, 0);
+    if (alert_kind >= 0) {
+        const char *kind_name = g_alert_kinds[alert_kind].name;
+        size_t      kind_len  = g_alert_kinds[alert_kind].len;
+        const char *cap_name  = g_alert_kinds[alert_kind].capitalised;
 
-    mdit_parser_block_tokenize(&state->md->block, state, startLine, nextLine);
+        /* Compose `markdown-alert markdown-alert-<lower>`. The lower
+         * form is just the original NOTE/TIP/.. ascii-lowercased; we
+         * synthesise it inline from `kind_name`. */
+        size_t prefix_len = sizeof "markdown-alert markdown-alert-" - 1;
+        char  *cls = (char *)mdit_arena_alloc(state->arena,
+                                              prefix_len + kind_len);
+        if (cls == NULL) goto restore;
+        memcpy(cls, "markdown-alert markdown-alert-", prefix_len);
+        for (size_t i = 0; i < kind_len; ++i) {
+            char c = kind_name[i];
+            if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+            cls[prefix_len + i] = c;
+        }
+        mdit_str cls_str = { cls, prefix_len + kind_len };
+        mdit_str kind_str_upper = arena_copy_str(state->arena,
+                                                 kind_name, kind_len);
 
-    mdit_token *close = mdit_state_block_push(state,
-        MDIT_STR_LIT("blockquote_close"), MDIT_STR_LIT("blockquote"), -1);
-    if (close == NULL) goto restore;
-    close->markup = MDIT_STR_LIT(">");
+        mdit_token *open = mdit_state_block_push(state,
+            MDIT_STR_LIT("alert_open"), MDIT_STR_LIT("div"), 1);
+        if (open == NULL) goto restore;
+        open->markup = MDIT_STR_LIT(">");
+        (void)mdit_token_attr_set_z(open, "class",
+                                    mdit_value_str(cls_str));
+        mdit_token_set_map(open, startLine, 0);
+        open->info = kind_str_upper;
+        (void)mdit_map_set_z(&open->meta, "kind",
+                             mdit_value_str(kind_str_upper));
+
+        mdit_token *t_open = mdit_state_block_push(state,
+            MDIT_STR_LIT("alert_title_open"), MDIT_STR_LIT("p"), 1);
+        if (t_open == NULL) goto restore;
+        (void)mdit_token_attr_set_z(t_open, "class",
+            mdit_value_str(MDIT_STR_LIT("markdown-alert-title")));
+
+        mdit_token *t_inline = mdit_state_block_push(state,
+            MDIT_STR_LIT("inline"), MDIT_STR_LIT(""), 0);
+        if (t_inline == NULL) goto restore;
+        t_inline->content = arena_copy_str(state->arena,
+                                           cap_name, strlen(cap_name));
+        mdit_token_set_children_empty(t_inline);
+
+        mdit_token *t_close = mdit_state_block_push(state,
+            MDIT_STR_LIT("alert_title_close"), MDIT_STR_LIT("p"), -1);
+        if (t_close == NULL) goto restore;
+
+        int32_t content_start = startLine + 1;
+        if (content_start < nextLine) {
+            mdit_parser_block_tokenize(&state->md->block, state,
+                                       content_start, nextLine);
+        } else {
+            state->line = nextLine;
+        }
+
+        mdit_token *close = mdit_state_block_push(state,
+            MDIT_STR_LIT("alert_close"), MDIT_STR_LIT("div"), -1);
+        if (close == NULL) goto restore;
+        close->markup = MDIT_STR_LIT(">");
+    } else {
+        mdit_token *open = mdit_state_block_push(state,
+            MDIT_STR_LIT("blockquote_open"), MDIT_STR_LIT("blockquote"), 1);
+        if (open == NULL) goto restore;
+        open->markup = MDIT_STR_LIT(">");
+        mdit_token_set_map(open, startLine, 0);
+
+        mdit_parser_block_tokenize(&state->md->block, state,
+                                   startLine, nextLine);
+
+        mdit_token *close = mdit_state_block_push(state,
+            MDIT_STR_LIT("blockquote_close"), MDIT_STR_LIT("blockquote"), -1);
+        if (close == NULL) goto restore;
+        close->markup = MDIT_STR_LIT(">");
+    }
 
     /* Patch open token's map[1] to state.line. The token vector may
      * grow during nested tokenization, so use the saved index rather

@@ -79,6 +79,8 @@ static bool rule_softbreak   (mdit_renderer *, const mdit_token *, size_t, size_
                               const mdit_renderer_options *, void *, mdit_buf *);
 static bool rule_text        (mdit_renderer *, const mdit_token *, size_t, size_t,
                               const mdit_renderer_options *, void *, mdit_buf *);
+static bool rule_list_item_open(mdit_renderer *, const mdit_token *, size_t, size_t,
+                                const mdit_renderer_options *, void *, mdit_buf *);
 static bool rule_html_block  (mdit_renderer *, const mdit_token *, size_t, size_t,
                               const mdit_renderer_options *, void *, mdit_buf *);
 static bool rule_html_inline (mdit_renderer *, const mdit_token *, size_t, size_t,
@@ -103,6 +105,8 @@ mdit_renderer *mdit_renderer_new(mdit_arena *arena)
     (void)mdit_renderer_add_rule(r, MDIT_STR_LIT("text"),         rule_text);
     (void)mdit_renderer_add_rule(r, MDIT_STR_LIT("html_block"),   rule_html_block);
     (void)mdit_renderer_add_rule(r, MDIT_STR_LIT("html_inline"),  rule_html_inline);
+    (void)mdit_renderer_add_rule(r, MDIT_STR_LIT("list_item_open"),
+                                 rule_list_item_open);
 
     return r;
 }
@@ -454,6 +458,45 @@ static bool rule_text(mdit_renderer *r,
 {
     (void)r; (void)opts; (void)env; (void)n_tokens;
     return mdit_escape_html(tokens[idx].content, out);
+}
+
+/* GFM tasklist override for `list_item_open`. The default `renderToken`
+ * emits the opening `<li>` (with attrs); when `meta["checked"]` is
+ * present we then append the input element matching upstream's
+ * `markdown_it.renderer.list_item_open`. The actual `<li>` is
+ * delegated by re-entering `mdit_renderer_render_token`. */
+static bool rule_list_item_open(mdit_renderer *r,
+                                const mdit_token *tokens, size_t n_tokens,
+                                size_t idx,
+                                const mdit_renderer_options *opts,
+                                void *env, mdit_buf *out)
+{
+    if (!mdit_renderer_render_token(r, tokens, n_tokens, idx, opts,
+                                    env, out)) {
+        return false;
+    }
+    const mdit_token *t = &tokens[idx];
+    const mdit_value *checked = mdit_map_get_z(&t->meta, "checked");
+    if (checked == NULL) return true;
+
+    /* `<input class="task-list-item-checkbox"[ disabled=""] type="checkbox"
+     *  [checked=""]> ` — exact byte sequence upstream emits. */
+    if (!mdit_buf_append(out,
+            "<input class=\"task-list-item-checkbox\"",
+            sizeof "<input class=\"task-list-item-checkbox\"" - 1)) {
+        return false;
+    }
+    if (!opts->tasklists_editable) {
+        if (!mdit_buf_append(out, " disabled=\"\"",
+                             sizeof " disabled=\"\"" - 1)) return false;
+    }
+    if (!mdit_buf_append(out, " type=\"checkbox\"",
+                         sizeof " type=\"checkbox\"" - 1)) return false;
+    if (checked->kind == MDIT_VALUE_BOOL && checked->u.b) {
+        if (!mdit_buf_append(out, " checked=\"\"",
+                             sizeof " checked=\"\"" - 1)) return false;
+    }
+    return mdit_buf_append(out, "> ", 2);
 }
 
 static bool rule_html_block(mdit_renderer *r,

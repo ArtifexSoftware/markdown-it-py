@@ -294,6 +294,77 @@ CASES: list = [
     ("strikethrough_lone_marker_left",
      "~~~strike~~"),
 
+    # GFM-extension: tasklists. Disabled by default; the C side mirrors
+    # `MarkdownIt('default', {'tasklists': True})`.
+    ("tasklists_basic_unchecked", "- [ ] item",          {"tasklists": True}),
+    ("tasklists_basic_checked",   "- [x] item",          {"tasklists": True}),
+    ("tasklists_basic_checked_X", "- [X] item",          {"tasklists": True}),
+    ("tasklists_mixed",
+     "- [ ] one\n- [x] two\n- three",                    {"tasklists": True}),
+    ("tasklists_ordered",         "1. [ ] first",        {"tasklists": True}),
+    ("tasklists_no_whitespace_after",
+     "- [x]nope",                                        {"tasklists": True}),
+    ("tasklists_only_brackets",   "- []",                {"tasklists": True}),
+    ("tasklists_inner_invalid",   "- [Y] item",          {"tasklists": True}),
+    ("tasklists_disabled_default", "- [ ] item"),  # no opts -> not a checkbox
+    ("tasklists_editable",
+     "- [x] one",                                        {"tasklists": True,
+                                                          "tasklists_editable": True}),
+    ("tasklists_no_class_when_no_check",
+     "- regular item",                                   {"tasklists": True}),
+    ("tasklists_indented",
+     "  - [ ] indented one\n  - [x] indented two",       {"tasklists": True}),
+    ("tasklists_with_nested_list",
+     "- [ ] outer\n  - inner",                           {"tasklists": True}),
+    ("tasklists_loose",
+     "- [ ] one\n\n- [x] two",                           {"tasklists": True}),
+    ("tasklists_with_emphasis",
+     "- [x] _italic_ item",                              {"tasklists": True}),
+
+    # GFM-extension: alerts. Disabled by default; mirrors
+    # `MarkdownIt('default', {'alerts': True})`.
+    ("alerts_note",
+     "> [!NOTE]\n> Useful information that users should know.",
+     {"alerts": True}),
+    ("alerts_tip",
+     "> [!TIP]\n> Helpful advice for doing things better.",
+     {"alerts": True}),
+    ("alerts_important",
+     "> [!IMPORTANT]\n> Key information users need to know.",
+     {"alerts": True}),
+    ("alerts_warning",
+     "> [!WARNING]\n> Critical content demanding attention.",
+     {"alerts": True}),
+    ("alerts_caution",
+     "> [!CAUTION]\n> Negative potential consequences of an action.",
+     {"alerts": True}),
+    ("alerts_lowercase_kind",
+     "> [!note]\n> case-insensitive marker.",
+     {"alerts": True}),
+    ("alerts_no_content",
+     "> [!NOTE]",
+     {"alerts": True}),  # no body line -> stays a blockquote
+    ("alerts_unknown_kind",
+     "> [!FOO]\n> body",
+     {"alerts": True}),
+    ("alerts_disabled_default",
+     "> [!NOTE]\n> body"),  # no opts -> renders as blockquote
+    ("alerts_with_inline",
+     "> [!TIP]\n> *italic* body",
+     {"alerts": True}),
+    ("alerts_multiline",
+     "> [!WARNING]\n> first\n> second",
+     {"alerts": True}),
+    ("alerts_nested_blockquote",
+     "> [!NOTE]\n> > nested",
+     {"alerts": True}),
+    ("alerts_not_first_line",
+     "> body\n> [!NOTE] second",  # marker not on first content line
+     {"alerts": True}),
+    ("alerts_with_extra_brackets",
+     "> [![NOTE]] body",
+     {"alerts": True}),
+
     # Inline rule: autolink (`<scheme:rest>` / `<email>`)
     ("autolink_url",                  "<http://example.com>"),
     ("autolink_url_https",            "<https://example.com/path?q=1>"),
@@ -584,6 +655,11 @@ def _emit_row(title: str, src: str, opts: dict) -> str:
     if opts.get("linkify"):     flags.append("MDIT_BLOCK_ORACLE_OPT_LINKIFY")
     if opts.get("typographer"): flags.append("MDIT_BLOCK_ORACLE_OPT_TYPOGRAPHER")
     if use_full_tlds:           flags.append("MDIT_BLOCK_ORACLE_OPT_FULL_TLDS")
+    if opts.get("tasklists_editable"):
+        flags.append("MDIT_BLOCK_ORACLE_OPT_TASKLISTS_EDITABLE")
+    elif opts.get("tasklists"):
+        flags.append("MDIT_BLOCK_ORACLE_OPT_TASKLISTS")
+    if opts.get("alerts"):      flags.append("MDIT_BLOCK_ORACLE_OPT_ALERTS")
     flag_expr = " | ".join(flags) if flags else "0"
     return (
         "    { "
@@ -603,10 +679,13 @@ def main() -> None:
         "#ifndef MDIT_TESTS_BLOCK_ORACLE_H",
         "#define MDIT_TESTS_BLOCK_ORACLE_H",
         "",
-        "#define MDIT_BLOCK_ORACLE_OPT_HTML        0x1u",
-        "#define MDIT_BLOCK_ORACLE_OPT_LINKIFY     0x2u",
-        "#define MDIT_BLOCK_ORACLE_OPT_FULL_TLDS   0x4u",
-        "#define MDIT_BLOCK_ORACLE_OPT_TYPOGRAPHER 0x8u",
+        "#define MDIT_BLOCK_ORACLE_OPT_HTML                0x01u",
+        "#define MDIT_BLOCK_ORACLE_OPT_LINKIFY             0x02u",
+        "#define MDIT_BLOCK_ORACLE_OPT_FULL_TLDS           0x04u",
+        "#define MDIT_BLOCK_ORACLE_OPT_TYPOGRAPHER         0x08u",
+        "#define MDIT_BLOCK_ORACLE_OPT_TASKLISTS           0x10u",
+        "#define MDIT_BLOCK_ORACLE_OPT_TASKLISTS_EDITABLE  0x20u",
+        "#define MDIT_BLOCK_ORACLE_OPT_ALERTS              0x40u",
         "",
         "typedef struct mdit_block_oracle_case {",
         "    const char *title;",

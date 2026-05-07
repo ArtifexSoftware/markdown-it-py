@@ -41,6 +41,22 @@ typedef struct mdit_options {
      * double-tilde (`~~text~~`). Mirrors upstream's
      * `options["strikethrough_single_tilde"]`. */
     bool      strikethrough_single_tilde;
+    /* GFM-extension: when true, the `list` block rule recognises
+     * `[ ]`/`[x]`/`[X]` task checkboxes at item start and stamps a
+     * `checked` meta flag plus `task-list-item` / `contains-task-list`
+     * classes on the relevant tokens. */
+    bool      tasklists;
+    /* When false (default) the rendered task checkbox carries
+     * `disabled=""`. Setting this to true matches upstream's
+     * `tasklists_editable=True`, which omits `disabled` so the
+     * checkbox is interactive in the rendered HTML. */
+    bool      tasklists_editable;
+    /* GFM-extension (markdown-it-py-only): when true, blockquotes whose
+     * first content line is `[!NOTE]` / `[!TIP]` / `[!IMPORTANT]` /
+     * `[!WARNING]` / `[!CAUTION]` are emitted as alert containers
+     * (`<div class="markdown-alert markdown-alert-<kind>">…</div>`)
+     * instead of `<blockquote>`. */
+    bool      alerts;
     /* Smart-quote replacements indexed by core/smartquotes:
      *   quotes[0] / quotes[1] - opening / closing double quote
      *   quotes[2] / quotes[3] - opening / closing single quote
@@ -53,6 +69,7 @@ typedef struct mdit_options {
 #define MDIT_OPTIONS_DEFAULTS                                       \
     {                                                               \
         100, false, false, false, false, false, false,              \
+        false, false, false,                                        \
         {                                                           \
             MDIT_STR_LIT("\xe2\x80\x9c"), /* U+201C  “ */           \
             MDIT_STR_LIT("\xe2\x80\x9d"), /* U+201D  ” */           \

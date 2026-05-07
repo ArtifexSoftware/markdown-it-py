@@ -29,6 +29,16 @@ static void run_case(const mdit_block_oracle_case *c)
     if (c->opts & MDIT_BLOCK_ORACLE_OPT_TYPOGRAPHER) {
         md.options.typographer = true;
     }
+    if (c->opts & MDIT_BLOCK_ORACLE_OPT_TASKLISTS) {
+        md.options.tasklists = true;
+    }
+    if (c->opts & MDIT_BLOCK_ORACLE_OPT_TASKLISTS_EDITABLE) {
+        md.options.tasklists = true;
+        md.options.tasklists_editable = true;
+    }
+    if (c->opts & MDIT_BLOCK_ORACLE_OPT_ALERTS) {
+        md.options.alerts = true;
+    }
     /* The full-TLDs flag is process-wide on the default linkifier;
      * save/restore around each case so tests stay independent. */
     bool prev_full_tlds = mdit_linkifier_default_full_tlds_enabled();

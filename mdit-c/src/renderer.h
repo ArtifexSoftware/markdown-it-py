@@ -52,11 +52,15 @@ typedef struct mdit_renderer mdit_renderer;
 typedef struct mdit_renderer_options {
     bool        xhtmlOut;
     bool        breaks;
+    /* When false (default) the GFM tasklist checkbox renders with
+     * `disabled=""`. Setting this true mirrors upstream's
+     * `tasklists_editable=True` and omits the disabled attribute. */
+    bool        tasklists_editable;
     mdit_str    langPrefix;
 } mdit_renderer_options;
 
 #define MDIT_RENDERER_OPTIONS_DEFAULTS  \
-    { false, false, MDIT_STR_LIT("language-") }
+    { false, false, false, MDIT_STR_LIT("language-") }
 
 typedef bool (*mdit_render_rule)(
     mdit_renderer *r,

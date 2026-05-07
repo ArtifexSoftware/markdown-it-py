@@ -63,9 +63,10 @@ bool mdit_md_render(mdit_md *md, mdit_str src, void *env, mdit_buf *out)
     if (!mdit_md_parse(md, src, env, &tokens)) return false;
 
     mdit_renderer_options ropts;
-    ropts.xhtmlOut   = md->options.xhtml_out;
-    ropts.breaks     = md->options.breaks;
-    ropts.langPrefix = md->options.lang_prefix;
+    ropts.xhtmlOut          = md->options.xhtml_out;
+    ropts.breaks            = md->options.breaks;
+    ropts.tasklists_editable = md->options.tasklists_editable;
+    ropts.langPrefix        = md->options.lang_prefix;
 
     bool ok = mdit_renderer_render(md->renderer, tokens.data, tokens.len,
                                    &ropts, env, out);

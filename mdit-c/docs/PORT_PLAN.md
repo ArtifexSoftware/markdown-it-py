@@ -257,6 +257,25 @@ remaining core rules).
   (`parse_link_destination` and `parse_link_title` are already shipped
   with the `reference` block rule.)
 
+**Slice 3d — tasklists + alerts (`mdit-py-plugins` corpus)** ✅ shipped:
+GFM tasklists and GitHub-style alerts, both gated behind opt-in
+options (`tasklists` / `tasklists_editable`, `alerts`) so default-preset
+behaviour is unchanged. Tasklists piggy-back on the existing `list`
+block rule: a 4-byte `[ ] `/`[x] `/`[X] ` peek at item-content start
+sets `meta["checked"]` on the `list_item_open` token, advances
+`bMarks[startLine]` past the checkbox, and a post-list pass adds
+`task-list-item` / `contains-task-list` classes (mirroring upstream
+exactly). The renderer overrides `list_item_open` to emit
+`<input class="task-list-item-checkbox" disabled="" type="checkbox" …>`
+(omitting `disabled` when `tasklists_editable=True`). Alerts extend
+the `blockquote` rule: after the existing line-scan loop a `[!KIND]`
+detector inspects the first content line, and on a match emits
+`alert_open` (`div.markdown-alert.markdown-alert-<kind>`) +
+`alert_title_open`/inline title (kind-capitalised) + body-tokenize
+(skipping the marker line) + `alert_close`. Block oracle gained
+15 + 14 hand-curated cases; token oracle picked up two new sources
+(`tasklists`, `alerts`).
+
 **Slice 3c — strikethrough** ✅ shipped:
 GFM `~~text~~` (and the optional `~text~` / `gfm-like2`-mode opt-in via
 `options.strikethrough_single_tilde`). Tokenizer pushes `~` runs onto

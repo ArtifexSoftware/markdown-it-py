@@ -64,6 +64,8 @@ static const char *const SOURCES[] = {
     "issue-fixes",
     "strikethrough",
     "strikethrough_single_tilde",
+    "tasklists",
+    "alerts",
 };
 static const size_t N_SOURCES = sizeof SOURCES / sizeof SOURCES[0];
 
@@ -365,6 +367,9 @@ typedef struct {
     bool        opt_linkify;
     bool        opt_typographer;
     bool        opt_strikethrough_single_tilde;
+    bool        opt_tasklists;
+    bool        opt_tasklists_editable;
+    bool        opt_alerts;
     bool        has_lang_prefix;
     mdit_str    lang_prefix;
     /* enabled / disabled lists are the raw JSON array views; we
@@ -389,6 +394,9 @@ static void row_config_extract(const char *line, size_t len, row_config *cfg)
         if (find_field(v.data, v.len, "linkify", 7, &sub) && jv_is_true(sub)) cfg->opt_linkify = true;
         if (find_field(v.data, v.len, "typographer", 11, &sub) && jv_is_true(sub)) cfg->opt_typographer = true;
         if (find_field(v.data, v.len, "strikethrough_single_tilde", 26, &sub) && jv_is_true(sub)) cfg->opt_strikethrough_single_tilde = true;
+        if (find_field(v.data, v.len, "tasklists", 9, &sub) && jv_is_true(sub)) cfg->opt_tasklists = true;
+        if (find_field(v.data, v.len, "tasklists_editable", 18, &sub) && jv_is_true(sub)) cfg->opt_tasklists_editable = true;
+        if (find_field(v.data, v.len, "alerts", 6, &sub) && jv_is_true(sub)) cfg->opt_alerts = true;
         if (find_field(v.data, v.len, "langPrefix", 10, &sub) &&
             sub.len >= 2 && sub.data[0] == '"' && sub.data[sub.len - 1] == '"') {
             /* Current fixture metadata uses simple unescaped strings
@@ -423,6 +431,9 @@ static void apply_row_config(mdit_md *md, const row_config *cfg)
     md->options.linkify     = cfg->opt_linkify;
     md->options.typographer = cfg->opt_typographer;
     md->options.strikethrough_single_tilde = cfg->opt_strikethrough_single_tilde;
+    md->options.tasklists                  = cfg->opt_tasklists;
+    md->options.tasklists_editable         = cfg->opt_tasklists_editable;
+    md->options.alerts                     = cfg->opt_alerts;
     if (cfg->has_lang_prefix) {
         md->options.lang_prefix = cfg->lang_prefix;
     }
