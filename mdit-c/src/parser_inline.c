@@ -977,6 +977,224 @@ static void ruler2_emphasis_post_process(mdit_state_inline *state)
     }
 }
 
+/* ---------------------------------------------------------------------
+ * Built-in rule: strikethrough tokenizer + post-process.
+ *
+ * Direct port of `markdown_it/rules_inline/strikethrough.py`. Two
+ * modes:
+ *
+ *   - canonical (`strikethrough_single_tilde` == false): runs of `~`
+ *     must be at least 2 wide; odd-length runs split a single `~` off
+ *     to the front and process the rest as `~~` pairs.
+ *   - single-tilde (gfm-like2): both `~` and `~~` are accepted, and
+ *     runs of 3+ are kept literal — opener and closer must have the
+ *     *same* width to match. Mirrors GitHub's rendering.
+ *
+ * Delimiters for strikethrough store `length=0` so emphasis's "rule of
+ * three" length checks don't apply; the actual marker width is kept
+ * in the text token's `content` and consulted during post-process to
+ * gate single-tilde matches.
+ * ------------------------------------------------------------------- */
+static bool inline_strikethrough_tokenize(mdit_state_inline *state, bool silent)
+{
+    if (silent) return false;
+    if (state->pos >= state->pos_max) return false;
+    if (state->src.data[state->pos] != '~') return false;
+
+    bool single_tilde =
+        state->md != NULL && state->md->options.strikethrough_single_tilde;
+
+    scanned_delims scanned = scan_delims(state, state->pos, true);
+    int32_t length = scanned.length;
+
+    if (single_tilde) {
+        if (length < 1) return false;
+        if (length > 2) {
+            /* Consume 3+ tildes as plain text; matches upstream so the
+             * scanner doesn't re-enter and pick a sub-run. */
+            mdit_token *t = mdit_state_inline_push(state,
+                MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
+            if (t == NULL) return false;
+            char *buf = (char *)mdit_arena_alloc(state->arena, (size_t)length);
+            if (buf == NULL) return false;
+            for (int32_t i = 0; i < length; ++i) buf[i] = '~';
+            t->content.data = buf;
+            t->content.len  = (size_t)length;
+            state->pos += (size_t)length;
+            return true;
+        }
+
+        mdit_token *t = mdit_state_inline_push(state,
+            MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
+        if (t == NULL) return false;
+        char *buf = (char *)mdit_arena_alloc(state->arena, (size_t)length);
+        if (buf == NULL) return false;
+        for (int32_t i = 0; i < length; ++i) buf[i] = '~';
+        t->content.data = buf;
+        t->content.len  = (size_t)length;
+
+        mdit_delimiter d;
+        d.marker = '~';
+        d.length = 0;
+        d.token  = (int32_t)(state->parent->children_len - 1);
+        d.end    = -1;
+        d.open   = scanned.can_open;
+        d.close  = scanned.can_close;
+        (void)mdit_vec_delimiter_push(state->delimiters, d);
+        state->pos += (size_t)length;
+        return true;
+    }
+
+    /* Canonical (`~~` only) mode. */
+    if (length < 2) return false;
+
+    if (length % 2) {
+        mdit_token *t = mdit_state_inline_push(state,
+            MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
+        if (t == NULL) return false;
+        char *buf = (char *)mdit_arena_alloc(state->arena, 1);
+        if (buf == NULL) return false;
+        buf[0] = '~';
+        t->content.data = buf;
+        t->content.len  = 1;
+        --length;
+    }
+
+    int32_t i = 0;
+    while (i < length) {
+        mdit_token *t = mdit_state_inline_push(state,
+            MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
+        if (t == NULL) return false;
+        char *buf = (char *)mdit_arena_alloc(state->arena, 2);
+        if (buf == NULL) return false;
+        buf[0] = '~';
+        buf[1] = '~';
+        t->content.data = buf;
+        t->content.len  = 2;
+
+        mdit_delimiter d;
+        d.marker = '~';
+        d.length = 0;
+        d.token  = (int32_t)(state->parent->children_len - 1);
+        d.end    = -1;
+        d.open   = scanned.can_open;
+        d.close  = scanned.can_close;
+        (void)mdit_vec_delimiter_push(state->delimiters, d);
+        i += 2;
+    }
+
+    state->pos += (size_t)scanned.length;
+    return true;
+}
+
+static void strikethrough_post_process_one(mdit_state_inline *state,
+                                           mdit_vec_delimiter *delimiters)
+{
+    if (delimiters == NULL || delimiters->len == 0) return;
+
+    bool single_tilde =
+        state->md != NULL && state->md->options.strikethrough_single_tilde;
+
+    /* lone-marker token indices. Capacity-bounded by the number of
+     * `s_close` tokens we emit, which is bounded by `delimiters->len`. */
+    int32_t *lone_markers = (int32_t *)mdit_arena_alloc(
+        state->arena, delimiters->len * sizeof *lone_markers);
+    size_t lone_count = 0;
+
+    int32_t maximum = (int32_t)delimiters->len;
+    for (int32_t i = 0; i < maximum; ++i) {
+        mdit_delimiter *startDelim = &delimiters->data[i];
+        if (startDelim->marker != '~') continue;
+        if (startDelim->end == -1) continue;
+
+        mdit_delimiter *endDelim = &delimiters->data[startDelim->end];
+
+        mdit_token *tokens = state->parent->children;
+        size_t token_count = state->parent->children_len;
+        if (startDelim->token < 0 ||
+            (size_t)startDelim->token >= token_count ||
+            endDelim->token < 0 ||
+            (size_t)endDelim->token >= token_count) {
+            continue;
+        }
+
+        mdit_str opener_content = tokens[startDelim->token].content;
+        mdit_str closer_content = tokens[endDelim->token].content;
+
+        if (single_tilde) {
+            /* Width must match (both `~` or both `~~`). */
+            if (opener_content.len != closer_content.len ||
+                (opener_content.len > 0 &&
+                 memcmp(opener_content.data, closer_content.data,
+                        opener_content.len) != 0)) {
+                continue;
+            }
+        }
+
+        /* Markup is the marker text we recorded on the opener token. */
+        mdit_str markup = opener_content;
+
+        mdit_token *open_tok  = &tokens[startDelim->token];
+        mdit_token *close_tok = &tokens[endDelim->token];
+
+        open_tok->type   = MDIT_STR_LIT("s_open");
+        open_tok->tag    = MDIT_STR_LIT("s");
+        open_tok->nesting = 1;
+        open_tok->markup = markup;
+        open_tok->content = MDIT_STR_LIT("");
+
+        close_tok->type   = MDIT_STR_LIT("s_close");
+        close_tok->tag    = MDIT_STR_LIT("s");
+        close_tok->nesting = -1;
+        close_tok->markup = markup;
+        close_tok->content = MDIT_STR_LIT("");
+
+        /* Track stray single `~` text tokens immediately preceding the
+         * close tag so we can shuffle them after subsequent s_close
+         * tags below. Mirrors upstream's `loneMarkers` handling. */
+        if (endDelim->token > 0) {
+            mdit_token *prev = &tokens[endDelim->token - 1];
+            if (mdit_str_eq_z(prev->type, "text") &&
+                prev->content.len == 1 &&
+                prev->content.data != NULL &&
+                prev->content.data[0] == '~') {
+                lone_markers[lone_count++] = endDelim->token - 1;
+            }
+        }
+    }
+
+    /* Move stray `~` markers past any run of subsequent `s_close`
+     * tokens. Walks back-to-front to keep indices stable. */
+    while (lone_count > 0) {
+        int32_t li = lone_markers[--lone_count];
+        int32_t lj = li + 1;
+
+        mdit_token *tokens = state->parent->children;
+        int32_t total = (int32_t)state->parent->children_len;
+
+        while (lj < total &&
+               mdit_str_eq_z(tokens[lj].type, "s_close")) {
+            ++lj;
+        }
+        --lj;
+
+        if (li != lj) {
+            mdit_token tmp = tokens[lj];
+            tokens[lj] = tokens[li];
+            tokens[li] = tmp;
+        }
+    }
+}
+
+static void ruler2_strikethrough_post_process(mdit_state_inline *state)
+{
+    strikethrough_post_process_one(state, state->delimiters);
+    for (size_t k = 0; k < state->tokens_meta_len; ++k) {
+        mdit_vec_delimiter *d = state->tokens_meta[k];
+        if (d != NULL) strikethrough_post_process_one(state, d);
+    }
+}
+
 static void ruler2_fragments_join(mdit_state_inline *state)
 {
     mdit_token *tokens = state->parent->children;
@@ -1111,6 +1329,9 @@ bool mdit_parser_inline_init(mdit_parser_inline *p, mdit_arena *arena)
     if (mdit_ruler_push(p->ruler, MDIT_STR_LIT("backticks"),
                         (mdit_rule_fn)inline_backticks, NULL,
                         MDIT_RULE_OPTIONS_NONE).index < 0) return false;
+    if (mdit_ruler_push(p->ruler, MDIT_STR_LIT("strikethrough"),
+                        (mdit_rule_fn)inline_strikethrough_tokenize, NULL,
+                        MDIT_RULE_OPTIONS_NONE).index < 0) return false;
     if (mdit_ruler_push(p->ruler, MDIT_STR_LIT("emphasis"),
                         (mdit_rule_fn)inline_emphasis_tokenize, NULL,
                         MDIT_RULE_OPTIONS_NONE).index < 0) return false;
@@ -1131,6 +1352,9 @@ bool mdit_parser_inline_init(mdit_parser_inline *p, mdit_arena *arena)
                         MDIT_RULE_OPTIONS_NONE).index < 0) return false;
     if (mdit_ruler_push(p->ruler2, MDIT_STR_LIT("balance_pairs"),
                         (mdit_rule_fn)ruler2_balance_pairs, NULL,
+                        MDIT_RULE_OPTIONS_NONE).index < 0) return false;
+    if (mdit_ruler_push(p->ruler2, MDIT_STR_LIT("strikethrough"),
+                        (mdit_rule_fn)ruler2_strikethrough_post_process, NULL,
                         MDIT_RULE_OPTIONS_NONE).index < 0) return false;
     if (mdit_ruler_push(p->ruler2, MDIT_STR_LIT("emphasis"),
                         (mdit_rule_fn)ruler2_emphasis_post_process, NULL,

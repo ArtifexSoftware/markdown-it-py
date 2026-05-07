@@ -257,6 +257,22 @@ remaining core rules).
   (`parse_link_destination` and `parse_link_title` are already shipped
   with the `reference` block rule.)
 
+**Slice 3c — strikethrough** ✅ shipped:
+GFM `~~text~~` (and the optional `~text~` / `gfm-like2`-mode opt-in via
+`options.strikethrough_single_tilde`). Tokenizer pushes `~` runs onto
+the delimiter list with `length=0` so emphasis's "rule of three"
+length checks don't apply; the actual marker width travels in the text
+token's content and is consulted during the post-process to gate
+single-tilde matches. Post-process rewrites paired delimiters to
+`s_open`/`s_close` and shuffles stray `~` markers past subsequent
+`s_close` runs (mirrors upstream's `loneMarkers` handling). Registered
+between `backticks` and `emphasis` in the inline ruler, and between
+`balance_pairs` and `emphasis` in ruler2 — same order as upstream.
+Disabled in the `commonmark` preset so `MarkdownIt('commonmark')` /
+the C CLI keep CommonMark-strict behaviour. The block oracle gained
+15 hand-curated strikethrough cases; the token oracle gained 15 +
+13 cases (`strikethrough` + `strikethrough_single_tilde` sources).
+
 **Slice 3a — small inline rules** ✅ shipped:
 `text` and `newline` came in with Phase 2's scaffolding. Slice 3a
 added `escape` (`\X` punctuation + hard-break), `backticks` (`` ` ``

@@ -264,6 +264,45 @@ def _meta_serializer(meta: dict[Any, Any]) -> Any:
     return encode(meta)
 
 
+# Subset of MarkdownIt options that affect parsing or rendering and so
+# must round-trip through the JSONL row for the C runner to apply. Any
+# new option that the C port grows to consume (e.g. for new plugins)
+# should be appended here so preset-derived values reach the C side.
+_EFFECTIVE_OPTION_KEYS: tuple[str, ...] = (
+    "html",
+    "xhtmlOut",
+    "breaks",
+    "langPrefix",
+    "linkify",
+    "typographer",
+    "strikethrough_single_tilde",
+    "tasklists",
+    "tasklists_editable",
+    "alerts",
+)
+
+
+def _effective_options(md: Any, explicit: dict[str, Any]) -> dict[str, Any]:
+    """Merge preset-derived options into the explicit overrides.
+
+    `Config.options` only captures `options_update`-style entries, so
+    flags promoted by a preset (e.g. `gfm-like2` setting
+    `strikethrough_single_tilde=True`) are otherwise invisible to the C
+    runner. We surface a curated subset on top of the explicit dict so
+    the JSONL row carries everything the C side needs to reconstruct
+    the parser configuration.
+    """
+    merged: dict[str, Any] = dict(explicit)
+    for key in _EFFECTIVE_OPTION_KEYS:
+        if key in merged:
+            continue
+        try:
+            merged[key] = md.options[key]
+        except KeyError:
+            continue
+    return merged
+
+
 def render_case(case: Case, md_cache: dict[str, Any]) -> dict[str, Any]:
     key = case.source
     md = md_cache.get(key)
@@ -277,11 +316,13 @@ def render_case(case: Case, md_cache: dict[str, Any]) -> dict[str, Any]:
     ]
     html = md.render(case.input)
 
+    meta = case.config.as_meta()
+    meta["options"] = _effective_options(md, meta["options"])
     row: dict[str, Any] = {
         "source": case.source,
         "id": case.id,
         "title": case.title,
-        **case.config.as_meta(),
+        **meta,
         "input": case.input,
         "tokens": token_dicts,
         "html": html,

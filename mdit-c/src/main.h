@@ -36,6 +36,11 @@ typedef struct mdit_options {
     bool      breaks;
     bool      linkify;
     bool      typographer;
+    /* GFM-extension: when true, the strikethrough inline rule accepts
+     * single-tilde (`~text~`) markers in addition to the canonical
+     * double-tilde (`~~text~~`). Mirrors upstream's
+     * `options["strikethrough_single_tilde"]`. */
+    bool      strikethrough_single_tilde;
     /* Smart-quote replacements indexed by core/smartquotes:
      *   quotes[0] / quotes[1] - opening / closing double quote
      *   quotes[2] / quotes[3] - opening / closing single quote
@@ -47,7 +52,7 @@ typedef struct mdit_options {
 
 #define MDIT_OPTIONS_DEFAULTS                                       \
     {                                                               \
-        100, false, false, false, false, false,                     \
+        100, false, false, false, false, false, false,              \
         {                                                           \
             MDIT_STR_LIT("\xe2\x80\x9c"), /* U+201C  “ */           \
             MDIT_STR_LIT("\xe2\x80\x9d"), /* U+201D  ” */           \

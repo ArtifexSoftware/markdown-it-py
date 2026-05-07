@@ -271,6 +271,29 @@ CASES: list = [
     ("emphasis_in_list",              "- *a*"),
     ("emphasis_in_table",             "| a | b |\n|---|---|\n| *x* | **y** |"),
 
+    # Inline rule: strikethrough (~~text~~), GFM extension. Enabled by
+    # default in `MarkdownIt('default')`; matches CommonMark commonmark
+    # preset's *exclusion* via the explicit `disabled` path on the C
+    # side (see `cli/md_cli.c`).
+    ("strikethrough_basic",           "~~strike~~"),
+    ("strikethrough_in_paragraph",    "before ~~mid~~ after"),
+    ("strikethrough_with_emph",       "~~bold *italic* end~~"),
+    ("strikethrough_nested",
+     "outer ~~one ~~two~~ three~~ end"),
+    ("strikethrough_unmatched",       "~~unclosed strike"),
+    ("strikethrough_single_tilde_off","one ~tilde~ between"),
+    ("strikethrough_three_tildes",    "~~~ literal ~~~"),
+    ("strikethrough_four_tildes",     "~~~~ four pair"),
+    ("strikethrough_with_link",
+     "~~[link](http://x.example)~~"),
+    ("strikethrough_in_heading",      "# ~~struck heading~~"),
+    ("strikethrough_in_blockquote",   "> ~~quoted~~"),
+    ("strikethrough_with_escape",     "\\~~not strike~~"),
+    ("strikethrough_with_code",       "~~before `tilde~~here` after~~"),
+    ("strikethrough_across_words",    "foo~~bar~~baz"),
+    ("strikethrough_lone_marker_left",
+     "~~~strike~~"),
+
     # Inline rule: autolink (`<scheme:rest>` / `<email>`)
     ("autolink_url",                  "<http://example.com>"),
     ("autolink_url_https",            "<https://example.com/path?q=1>"),

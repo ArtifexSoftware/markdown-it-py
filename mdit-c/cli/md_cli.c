@@ -300,8 +300,11 @@ int main(int argc, char **argv)
     md.options.html        = true;
     md.options.xhtml_out   = true;
     {
-        mdit_str table_name = MDIT_STR_LIT("table");
-        (void)mdit_ruler_disable(md.block.ruler, &table_name, 1, true);
+        mdit_str table_name  = MDIT_STR_LIT("table");
+        mdit_str strike_name = MDIT_STR_LIT("strikethrough");
+        (void)mdit_ruler_disable(md.block.ruler,    &table_name,  1, true);
+        (void)mdit_ruler_disable(md.inline_p.ruler, &strike_name, 1, true);
+        (void)mdit_ruler_disable(md.inline_p.ruler2, &strike_name, 1, true);
     }
 
     int exit_code = 0;

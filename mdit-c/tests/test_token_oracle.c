@@ -62,6 +62,8 @@ static const char *const SOURCES[] = {
     "proto",
     "xss",
     "issue-fixes",
+    "strikethrough",
+    "strikethrough_single_tilde",
 };
 static const size_t N_SOURCES = sizeof SOURCES / sizeof SOURCES[0];
 
@@ -362,6 +364,7 @@ typedef struct {
     bool        opt_breaks;
     bool        opt_linkify;
     bool        opt_typographer;
+    bool        opt_strikethrough_single_tilde;
     bool        has_lang_prefix;
     mdit_str    lang_prefix;
     /* enabled / disabled lists are the raw JSON array views; we
@@ -385,6 +388,7 @@ static void row_config_extract(const char *line, size_t len, row_config *cfg)
         if (find_field(v.data, v.len, "breaks", 6, &sub) && jv_is_true(sub)) cfg->opt_breaks = true;
         if (find_field(v.data, v.len, "linkify", 7, &sub) && jv_is_true(sub)) cfg->opt_linkify = true;
         if (find_field(v.data, v.len, "typographer", 11, &sub) && jv_is_true(sub)) cfg->opt_typographer = true;
+        if (find_field(v.data, v.len, "strikethrough_single_tilde", 26, &sub) && jv_is_true(sub)) cfg->opt_strikethrough_single_tilde = true;
         if (find_field(v.data, v.len, "langPrefix", 10, &sub) &&
             sub.len >= 2 && sub.data[0] == '"' && sub.data[sub.len - 1] == '"') {
             /* Current fixture metadata uses simple unescaped strings
@@ -418,6 +422,7 @@ static void apply_row_config(mdit_md *md, const row_config *cfg)
     md->options.breaks      = cfg->opt_breaks;
     md->options.linkify     = cfg->opt_linkify;
     md->options.typographer = cfg->opt_typographer;
+    md->options.strikethrough_single_tilde = cfg->opt_strikethrough_single_tilde;
     if (cfg->has_lang_prefix) {
         md->options.lang_prefix = cfg->lang_prefix;
     }
@@ -425,12 +430,16 @@ static void apply_row_config(mdit_md *md, const row_config *cfg)
         mdit_md_set_linkifier(md, mdit_linkifier_default());
     }
 
-    /* The C port has GFM table on by default, but upstream's
-     * `commonmark` preset doesn't. Disable explicitly so the token
-     * stream lines up. */
+    /* The C port has GFM `table` and inline `strikethrough` on by
+     * default, matching upstream's `default` preset. Upstream's
+     * `commonmark` preset, however, enables neither, so we disable
+     * both explicitly when the test row is tagged for commonmark. */
     if (cfg->in_commonmark) {
         mdit_str table = MDIT_STR_LIT("table");
         (void)mdit_ruler_disable(md->block.ruler, &table, 1, true);
+        mdit_str strike = MDIT_STR_LIT("strikethrough");
+        (void)mdit_ruler_disable(md->inline_p.ruler,  &strike, 1, true);
+        (void)mdit_ruler_disable(md->inline_p.ruler2, &strike, 1, true);
     }
 
     /* Apply explicit `disabled` rules (try every chain; ignore misses). */
