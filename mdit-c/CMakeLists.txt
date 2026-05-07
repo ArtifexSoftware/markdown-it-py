@@ -89,12 +89,17 @@ endif()
 # ---------------------------------------------------------------------------
 # CLI / tests / bindings — wired in their own subdirectories when populated.
 # ---------------------------------------------------------------------------
+if(MDIT_BUILD_TESTS)
+    # `enable_testing()` must run in the root CMakeLists *before* any
+    # subdirectory that registers `add_test(...)` calls (cli/, tests/).
+    enable_testing()
+endif()
+
 if(MDIT_BUILD_CLI AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/cli/CMakeLists.txt")
     add_subdirectory(cli)
 endif()
 
 if(MDIT_BUILD_TESTS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
-    enable_testing()
     add_subdirectory(tests)
 endif()
 

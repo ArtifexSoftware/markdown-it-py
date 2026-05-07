@@ -130,6 +130,17 @@ jobs:
             cxx: ""
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install markdown-it-py (CLI parity oracle)
+        # The CLI parity test in cli/test_cli_parity.py invokes
+        # ``python -m markdown_it.cli.parse`` and byte-compares against
+        # ``markdown-it-c``. Install the in-tree Python package so the
+        # test runs; if missing, the test self-skips with exit 0.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
       - name: Configure CMake (Unix)
         if: runner.os != 'Windows'
         env:
@@ -160,6 +171,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install markdown-it-py (CLI parity oracle)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
       - name: Configure with ASan + UBSan
         env:
           CC: clang

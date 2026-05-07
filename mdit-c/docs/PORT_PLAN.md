@@ -288,12 +288,24 @@ cases.
 **Exit criterion:** all CommonMark spec tests + all `tests/test_port`
 cases produce identical HTML to Python.
 
-### Phase 5 — bindings, CLI, packaging
+### Phase 5 — bindings, CLI, packaging *(in progress)*
 
-- `cli/md_cli` (≈ `markdown_it/cli/parse.py`).
-- CPython extension exposing the same `MarkdownIt` Python class so the
-  existing `pytest` suite runs unmodified against the C engine.
-- CMake install rules, pkg-config, versioned shared lib.
+- [x] **`cli/md_cli`** — `markdown-it-c` command-line driver. Mirrors
+      `markdown_it/cli/parse.py`'s batch + `--stdin` modes (interactive
+      REPL is intentionally omitted — pipelines are the natural fit).
+      Loads the `commonmark` preset to byte-match `python -m
+      markdown_it.cli.parse`: `xhtmlOut=True`, `html=True`,
+      `maxNesting=20`, GFM `table` rule disabled. Argv: `-h/--help`,
+      `-v/--version`, `--stdin`, `--`, then one or more filenames.
+      Exit codes: `0` ok, `1` file open/read error, `2` render error,
+      `64` usage error (sysexits-style). Smoke + parity tests live in
+      `cli/`: `md_cli_version`, `md_cli_help`, `md_cli_unknown_option`,
+      and `md_cli_python_parity` (a Python-driven byte-equality sweep
+      against the upstream CLI; auto-skips if `markdown_it` isn't
+      importable in the test interpreter).
+- [ ] CPython extension exposing the same `MarkdownIt` Python class so
+      the existing `pytest` suite runs unmodified against the C engine.
+- [ ] CMake install rules, pkg-config, versioned shared lib.
 
 ### Phase 6 — hardening
 
