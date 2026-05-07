@@ -22,10 +22,10 @@ defaults:
 
 jobs:
   # ---------------------------------------------------------------------
-  # Phase 0: regenerate the regex inventory and token oracle from the
-  # *current* Python source. If either drifts vs the committed copy the
-  # job fails -- that's the signal to refresh the oracle in the same PR
-  # that touches markdown_it/.
+  # Regenerate all Python-derived artifacts from the current source. If
+  # any committed artifact drifts, fail the job; the JSONL token oracle
+  # itself is intentionally ignored by git and uploaded for the CTest
+  # jobs to consume.
   # ---------------------------------------------------------------------
   oracle:
     name: regenerate oracle (${{ matrix.os }})
@@ -51,6 +51,8 @@ jobs:
         run: python mdit-c/scripts/token_oracle.py --quiet
       - name: Regenerate Unicode tables
         run: python mdit-c/scripts/gen_unicode_tables.py
+      - name: Regenerate Unicode case-fold table
+        run: python mdit-c/scripts/gen_casefold.py
       - name: Regenerate UTF test vectors
         run: python mdit-c/scripts/gen_utf_test_vectors.py
       - name: Regenerate HTML5 entity table
@@ -61,6 +63,8 @@ jobs:
         run: python mdit-c/scripts/gen_token_test_vectors.py
       - name: Regenerate URL test vectors
         run: python mdit-c/scripts/gen_url_test_vectors.py
+      - name: Regenerate full TLD table
+        run: python mdit-c/scripts/gen_tlds.py
       - name: Regenerate block-rule oracle (hand cases + CommonMark sweep)
         run: python mdit-c/scripts/sweep_block_oracle.py
       - name: Detect drift in any generated artifact
@@ -70,13 +74,14 @@ jobs:
           # the contributor exactly what to regenerate.
           paths=(
             mdit-c/docs/regex-inventory.md
-            mdit-c/tests/oracle/manifest.json
             mdit-c/src/utf_tables.c
+            mdit-c/src/case_fold.c
             mdit-c/tests/utf_vectors.h
             mdit-c/src/entities_table.c
             mdit-c/tests/entity_vectors.h
             mdit-c/tests/token_vectors.h
             mdit-c/tests/url_vectors.h
+            mdit-c/src/linkifier_tlds_full.c
             mdit-c/tests/block_oracle.h
           )
           git status --porcelain "${paths[@]}"
@@ -97,13 +102,11 @@ jobs:
           retention-days: 14
 
   # ---------------------------------------------------------------------
-  # CMake configure smoke test across the three target platforms /
-  # compilers. Phase 0 has no C source yet, so we only assert that
-  # `cmake -S mdit-c -B build` succeeds; Phase 1+ will switch this to
-  # `cmake --build` and ctest.
+  # CMake build + test across the three target platforms / compilers.
   # ---------------------------------------------------------------------
   cmake-configure:
     name: cmake configure (${{ matrix.os }} / ${{ matrix.compiler }})
+    needs: oracle
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -140,16 +143,20 @@ jobs:
           cmake -S mdit-c -B build -G "Visual Studio 17 2022" -A x64 -DMDIT_WERROR=ON
       - name: Build
         run: cmake --build build --config RelWithDebInfo --parallel
+      - name: Download token oracle
+        uses: actions/download-artifact@v4
+        with:
+          name: mdit-c-oracle
+          path: mdit-c/tests/oracle
       - name: Test
         run: ctest --test-dir build -C RelWithDebInfo --output-on-failure
 
   # ---------------------------------------------------------------------
-  # ASan/UBSan job. Today this is essentially the same configure-only
-  # smoke test; once Phase 1 lands C source it will exercise the unit
-  # tests under sanitizers.
+  # ASan/UBSan job.
   # ---------------------------------------------------------------------
   sanitizers:
     name: sanitizers (Linux / clang)
+    needs: oracle
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -164,5 +171,10 @@ jobs:
             -DMDIT_WERROR=ON
       - name: Build
         run: cmake --build build-san --parallel
+      - name: Download token oracle
+        uses: actions/download-artifact@v4
+        with:
+          name: mdit-c-oracle
+          path: mdit-c/tests/oracle
       - name: Test under sanitizers
         run: ctest --test-dir build-san --output-on-failure
