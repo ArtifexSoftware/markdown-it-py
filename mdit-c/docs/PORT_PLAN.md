@@ -340,7 +340,25 @@ cases produce identical HTML to Python.
       importable in the test interpreter).
 - [ ] CPython extension exposing the same `MarkdownIt` Python class so
       the existing `pytest` suite runs unmodified against the C engine.
-- [ ] CMake install rules, pkg-config, versioned shared lib.
+- [x] **CMake install rules + package config + pkg-config**. Toggled by
+      `MDIT_INSTALL` (default ON). Installs `mdit_static` (renamed
+      `libmdit.{a,lib}`) under `CMAKE_INSTALL_LIBDIR`, the curated
+      `include/mdit/mdit.h` header plus the current `src/*.h` impl
+      headers under `CMAKE_INSTALL_INCLUDEDIR/mdit/`, and the
+      `markdown-it-c` CLI under `CMAKE_INSTALL_BINDIR`. Generates a
+      relocatable `mditConfig.cmake` (downstream calls
+      `find_package(mdit REQUIRED)` → `mdit::mdit`), a
+      `mditConfigVersion.cmake` matching the project version with
+      `SameMinorVersion` compatibility, and a `mdit.pc` for pkg-config
+      consumers. The PUBLIC include surface is wrapped in
+      `BUILD_INTERFACE`/`INSTALL_INTERFACE` generator expressions so a
+      single export works from both build and install trees. A new
+      `install_smoke` CTest exercises the whole chain end-to-end:
+      stage-install → configure a tiny consumer with
+      `find_package(mdit)` → build → run → assert HTML output for
+      `# hi\n`. Versioned shared-lib build is left for a follow-up
+      slice (it requires deciding on symbol-visibility export macros
+      across all `src/*.h` headers).
 
 ### Phase 6 — hardening
 

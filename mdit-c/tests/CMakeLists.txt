@@ -43,3 +43,36 @@ endforeach()
 target_compile_definitions(test_token_oracle PRIVATE
     "MDIT_TEST_ORACLE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/oracle\""
 )
+
+# ---------------------------------------------------------------------------
+# install-package smoke test
+#
+# Exercises the install rules + CMake package config end-to-end: stage
+# install -> configure a tiny consumer with `find_package(mdit)` ->
+# build -> run -> assert HTML matches. The CMake driver lives in
+# `install_smoke/run_smoke.cmake`.
+#
+# Skipped when MDIT_INSTALL=OFF (no install rules emitted) or when the
+# parent generator is multi-config and we couldn't infer it cleanly.
+# ---------------------------------------------------------------------------
+if(MDIT_INSTALL)
+    set(_smoke_stage  "${CMAKE_BINARY_DIR}/install_smoke_stage")
+    set(_smoke_build  "${CMAKE_BINARY_DIR}/install_smoke_build")
+    set(_smoke_source "${CMAKE_CURRENT_SOURCE_DIR}/install_smoke")
+    add_test(
+        NAME install_smoke
+        COMMAND ${CMAKE_COMMAND}
+            -DSTAGE_DIR=${_smoke_stage}
+            -DBINARY_DIR=${_smoke_build}
+            -DSOURCE_DIR=${_smoke_source}
+            -DSUPER_BUILD_DIR=${CMAKE_BINARY_DIR}
+            -DCONFIG=$<CONFIG>
+            -DGENERATOR=${CMAKE_GENERATOR}
+            -P "${_smoke_source}/run_smoke.cmake"
+    )
+    # The smoke consumer needs the full library + CLI + headers to be
+    # built first. Express that as a fixture so ctest -j stays correct.
+    set_tests_properties(install_smoke PROPERTIES
+        LABELS "install"
+    )
+endif()

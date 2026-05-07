@@ -1,0 +1,23 @@
+@PACKAGE_INIT@
+
+# mditConfig.cmake — drop-in package config for `find_package(mdit)`.
+#
+# Usage from a downstream CMake project:
+#
+#   find_package(mdit REQUIRED)
+#   target_link_libraries(my_app PRIVATE mdit::mdit)
+#
+# The `mdit::mdit` IMPORTED target carries everything callers need:
+# the library itself, public include directories, and the warning /
+# sanitizer interface targets the upstream build pulls in.
+
+include("${CMAKE_CURRENT_LIST_DIR}/mditTargets.cmake")
+
+# Provide a stable alias name. Internally the static library target is
+# `mdit::mdit_static`; we expose `mdit::mdit` so downstream code does
+# not couple to whether we ship a static or shared variant.
+if(NOT TARGET mdit::mdit AND TARGET mdit::mdit_static)
+    add_library(mdit::mdit ALIAS mdit::mdit_static)
+endif()
+
+check_required_components(mdit)
