@@ -9,19 +9,18 @@ Today, that subset is:
 
 * ``MarkdownIt(preset="default", options=None)``
 * ``MarkdownIt.render(src) -> str``
+* ``MarkdownIt.parse(src) -> list[Token]``
+* ``Token.as_dict(as_upstream=True)``
 * ``MarkdownIt.options`` (read/write subset of upstream options)
 * ``MarkdownIt.enable(names, ignoreInvalid=False)`` and
   ``MarkdownIt.disable(...)``
 
-Token-stream access (``parse``, ``Token``, ``SyntaxTreeNode``) is
-deliberately NOT exposed yet — it requires a stable token-accessor C
-API that lands in a follow-up slice. Calling ``parse`` here will raise
-``AttributeError`` so importers fail loudly instead of silently
-diverging from the upstream Python API.
+``SyntaxTreeNode`` and the richer plugin/ruler Python API are not
+exposed yet.
 """
 
 from __future__ import annotations
 
-from ._mdit_c import MarkdownIt, __version__
+from ._mdit_c import MarkdownIt, Token, __version__
 
-__all__ = ["MarkdownIt", "__version__"]
+__all__ = ["MarkdownIt", "Token", "__version__"]

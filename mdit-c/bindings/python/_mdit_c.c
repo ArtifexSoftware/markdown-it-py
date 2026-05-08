@@ -5,6 +5,7 @@
  *
  *   class MarkdownIt:
  *       def __init__(self, preset: str = "default", options: dict | None = None) -> None: ...
+ *       def parse(self, src: str, env: object | None = None) -> list[Token]: ...
  *       def render(self, src: str) -> str: ...
  *       @property
  *       def options(self) -> dict: ...
@@ -20,10 +21,10 @@
  * ``tasklists``, ``tasklists_editable``, ``alerts``); unknown keys are
  * silently ignored to match upstream's `MarkdownIt(opts)` behaviour.
  *
- * The full Python ``markdown_it.MarkdownIt`` API surface (parse,
- * tokens, rulers, plugins) is intentionally NOT implemented here — it
- * lands in a follow-up slice once the C side grows a stable token
- * accessor API.
+ * The full Python ``markdown_it.MarkdownIt`` API surface (rulers,
+ * plugins, renderer customisation, SyntaxTreeNode) is intentionally NOT
+ * implemented here — those land in follow-up slices once the C side
+ * grows stable public accessors for the remaining pieces.
  */
 
 #define PY_SSIZE_T_CLEAN
@@ -43,6 +44,7 @@
 #  include <Python.h>
 #endif
 
+#include <stddef.h>
 #include <string.h>
 
 #include "arena.h"
@@ -50,6 +52,758 @@
 #include "main.h"
 #include "ruler.h"
 #include "str.h"
+#include "token.h"
+
+#include <structmember.h>
+
+/* ------------------------------------------------------------------ */
+/* Token object                                                       */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    PyObject_HEAD
+    PyObject *type;
+    PyObject *tag;
+    int       nesting;
+    PyObject *attrs;
+    PyObject *map;
+    int       level;
+    PyObject *children;
+    PyObject *content;
+    PyObject *markup;
+    PyObject *info;
+    PyObject *meta;
+    int       block;
+    int       hidden;
+} PyToken;
+
+static PyTypeObject PyToken_Type;
+
+static PyObject *py_from_mdit_str(mdit_str s)
+{
+    return PyUnicode_DecodeUTF8(s.data ? s.data : "", (Py_ssize_t)s.len,
+                                "strict");
+}
+
+static PyObject *py_from_value(const mdit_value *v)
+{
+    switch (v->kind) {
+        case MDIT_VALUE_NULL:
+            Py_RETURN_NONE;
+        case MDIT_VALUE_BOOL:
+            return PyBool_FromLong(v->u.b ? 1 : 0);
+        case MDIT_VALUE_INT:
+            return PyLong_FromLongLong((long long)v->u.i);
+        case MDIT_VALUE_DOUBLE:
+            return PyFloat_FromDouble(v->u.d);
+        case MDIT_VALUE_STR:
+            return py_from_mdit_str(v->u.s);
+    }
+    PyErr_SetString(PyExc_RuntimeError, "unknown mdit_value kind");
+    return NULL;
+}
+
+static PyObject *py_map_to_dict(const mdit_map *m)
+{
+    PyObject *d = PyDict_New();
+    if (d == NULL) return NULL;
+    for (size_t i = 0; i < mdit_map_len(m); ++i) {
+        const mdit_map_entry *e = mdit_map_at(m, i);
+        PyObject *key = py_from_mdit_str(e->key);
+        PyObject *val = py_from_value(&e->value);
+        if (key == NULL || val == NULL ||
+            PyDict_SetItem(d, key, val) < 0) {
+            Py_XDECREF(key);
+            Py_XDECREF(val);
+            Py_DECREF(d);
+            return NULL;
+        }
+        Py_DECREF(key);
+        Py_DECREF(val);
+    }
+    return d;
+}
+
+static PyObject *py_attrs_as_upstream(PyObject *attrs)
+{
+    Py_ssize_t n = PyDict_Size(attrs);
+    if (n == 0) Py_RETURN_NONE;
+
+    PyObject *items = PyList_New(n);
+    if (items == NULL) return NULL;
+
+    Py_ssize_t pos = 0;
+    Py_ssize_t out_i = 0;
+    PyObject *key = NULL;
+    PyObject *val = NULL;
+    while (PyDict_Next(attrs, &pos, &key, &val)) {
+        PyObject *pair = PyList_New(2);
+        if (pair == NULL) {
+            Py_DECREF(items);
+            return NULL;
+        }
+        Py_INCREF(key);
+        Py_INCREF(val);
+        PyList_SET_ITEM(pair, 0, key);
+        PyList_SET_ITEM(pair, 1, val);
+        PyList_SET_ITEM(items, out_i++, pair);
+    }
+    return items;
+}
+
+static PyObject *PyToken_as_dict(PyToken *self, PyObject *args,
+                                 PyObject *kwargs)
+{
+    static char *kwlist[] = {
+        "children", "as_upstream", "meta_serializer", "filter",
+        "dict_factory", NULL
+    };
+    int children_flag = 1;
+    int as_upstream = 1;
+    PyObject *meta_serializer = Py_None;
+    PyObject *filter = Py_None;
+    PyObject *dict_factory = (PyObject *)&PyDict_Type;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|ppOOO", kwlist,
+                                     &children_flag, &as_upstream,
+                                     &meta_serializer, &filter,
+                                     &dict_factory)) {
+        return NULL;
+    }
+    if (!PyCallable_Check(dict_factory)) {
+        PyErr_SetString(PyExc_TypeError, "dict_factory must be callable");
+        return NULL;
+    }
+
+    PyObject *d = PyObject_CallNoArgs(dict_factory);
+    if (d == NULL) return NULL;
+
+#define SET_ITEM(name, value) do {                                      \
+        PyObject *_key = PyUnicode_FromString(name);                    \
+        PyObject *_val = (value);                                       \
+        if (_key == NULL || _val == NULL) {                             \
+            Py_XDECREF(_key);                                           \
+            Py_XDECREF(_val);                                           \
+            Py_DECREF(d);                                               \
+            return NULL;                                                \
+        }                                                               \
+        int _keep = 1;                                                  \
+        if (filter != Py_None) {                                        \
+            PyObject *_ok = PyObject_CallFunctionObjArgs(               \
+                filter, _key, _val, NULL);                              \
+            if (_ok == NULL) {                                          \
+                Py_DECREF(_key); Py_DECREF(_val); Py_DECREF(d);         \
+                return NULL;                                            \
+            }                                                           \
+            _keep = PyObject_IsTrue(_ok);                               \
+            Py_DECREF(_ok);                                             \
+            if (_keep < 0) {                                            \
+                Py_DECREF(_key); Py_DECREF(_val); Py_DECREF(d);         \
+                return NULL;                                            \
+            }                                                           \
+        }                                                               \
+        if (_keep && PyObject_SetItem(d, _key, _val) < 0) {             \
+            Py_DECREF(_key); Py_DECREF(_val); Py_DECREF(d);             \
+            return NULL;                                                \
+        }                                                               \
+        Py_DECREF(_key);                                                \
+        Py_DECREF(_val);                                                \
+    } while (0)
+#define SET_BORROWED(name, obj) do { Py_INCREF(obj); SET_ITEM(name, obj); } while (0)
+#define SET_LONG(name, v) SET_ITEM(name, PyLong_FromLong((long)(v)))
+#define SET_BOOL(name, v) SET_ITEM(name, PyBool_FromLong((v) ? 1 : 0))
+
+    SET_BORROWED("type", self->type);
+    SET_BORROWED("tag", self->tag);
+    SET_LONG("nesting", self->nesting);
+    if (as_upstream) {
+        SET_ITEM("attrs", py_attrs_as_upstream(self->attrs));
+    } else {
+        SET_BORROWED("attrs", self->attrs);
+    }
+    SET_BORROWED("map", self->map);
+    SET_LONG("level", self->level);
+
+    if (children_flag && self->children != Py_None &&
+        PyList_Check(self->children) && PyList_GET_SIZE(self->children) > 0) {
+        Py_ssize_t n = PyList_GET_SIZE(self->children);
+        PyObject *child_dicts = PyList_New(n);
+        if (child_dicts == NULL) { Py_DECREF(d); return NULL; }
+        for (Py_ssize_t i = 0; i < n; ++i) {
+            PyObject *child = PyList_GET_ITEM(self->children, i);
+            PyObject *kw = Py_BuildValue(
+                "{s:O,s:O,s:O,s:O,s:O}",
+                "children", children_flag ? Py_True : Py_False,
+                "as_upstream", as_upstream ? Py_True : Py_False,
+                "meta_serializer", meta_serializer,
+                "filter", filter,
+                "dict_factory", dict_factory);
+            if (kw == NULL) {
+                Py_DECREF(child_dicts); Py_DECREF(d); return NULL;
+            }
+            PyObject *method = PyObject_GetAttrString(child, "as_dict");
+            PyObject *empty_args = PyTuple_New(0);
+            if (method == NULL || empty_args == NULL) {
+                Py_XDECREF(method);
+                Py_XDECREF(empty_args);
+                Py_DECREF(kw);
+                Py_DECREF(child_dicts); Py_DECREF(d); return NULL;
+            }
+            PyObject *converted = PyObject_Call(method, empty_args, kw);
+            Py_DECREF(method);
+            Py_DECREF(empty_args);
+            Py_DECREF(kw);
+            if (converted == NULL) {
+                Py_DECREF(child_dicts); Py_DECREF(d); return NULL;
+            }
+            PyList_SET_ITEM(child_dicts, i, converted);
+        }
+        SET_ITEM("children", child_dicts);
+    } else {
+        SET_BORROWED("children", self->children);
+    }
+
+    SET_BORROWED("content", self->content);
+    SET_BORROWED("markup", self->markup);
+    SET_BORROWED("info", self->info);
+    if (meta_serializer != Py_None) {
+        PyObject *meta = PyObject_CallFunctionObjArgs(meta_serializer,
+                                                      self->meta, NULL);
+        SET_ITEM("meta", meta);
+    } else {
+        SET_BORROWED("meta", self->meta);
+    }
+    SET_BOOL("block", self->block);
+    SET_BOOL("hidden", self->hidden);
+
+    return d;
+
+#undef SET_BOOL
+#undef SET_LONG
+#undef SET_BORROWED
+#undef SET_ITEM
+}
+
+static void PyToken_dealloc(PyToken *self)
+{
+    Py_XDECREF(self->type);
+    Py_XDECREF(self->tag);
+    Py_XDECREF(self->attrs);
+    Py_XDECREF(self->map);
+    Py_XDECREF(self->children);
+    Py_XDECREF(self->content);
+    Py_XDECREF(self->markup);
+    Py_XDECREF(self->info);
+    Py_XDECREF(self->meta);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+
+static PyObject *PyToken_attrIndex(PyToken *self, PyObject *arg)
+{
+    Py_ssize_t pos = 0;
+    Py_ssize_t idx = 0;
+    PyObject *key = NULL;
+    PyObject *val = NULL;
+    while (PyDict_Next(self->attrs, &pos, &key, &val)) {
+        int eq = PyObject_RichCompareBool(key, arg, Py_EQ);
+        if (eq < 0) return NULL;
+        if (eq) return PyLong_FromSsize_t(idx);
+        ++idx;
+    }
+    return PyLong_FromLong(-1);
+}
+
+static PyObject *PyToken_attrItems(PyToken *self, PyObject *Py_UNUSED(ignored))
+{
+    return PyMapping_Items(self->attrs);
+}
+
+static PyObject *PyToken_attrGet(PyToken *self, PyObject *arg)
+{
+    PyObject *v = PyDict_GetItemWithError(self->attrs, arg);
+    if (v == NULL) {
+        if (PyErr_Occurred()) return NULL;
+        Py_RETURN_NONE;
+    }
+    Py_INCREF(v);
+    return v;
+}
+
+static PyObject *PyToken_attrSet(PyToken *self, PyObject *args)
+{
+    PyObject *name = NULL;
+    PyObject *value = NULL;
+    if (!PyArg_ParseTuple(args, "OO", &name, &value)) return NULL;
+    if (PyDict_SetItem(self->attrs, name, value) < 0) return NULL;
+    Py_RETURN_NONE;
+}
+
+static PyObject *PyToken_attrPush(PyToken *self, PyObject *arg)
+{
+    PyObject *seq = PySequence_Fast(arg, "attrPush expects a (name, value) pair");
+    if (seq == NULL) return NULL;
+    if (PySequence_Fast_GET_SIZE(seq) != 2) {
+        Py_DECREF(seq);
+        PyErr_SetString(PyExc_ValueError, "attrPush expects a pair");
+        return NULL;
+    }
+    PyObject *name = PySequence_Fast_GET_ITEM(seq, 0);
+    PyObject *value = PySequence_Fast_GET_ITEM(seq, 1);
+    int rc = PyDict_SetItem(self->attrs, name, value);
+    Py_DECREF(seq);
+    if (rc < 0) return NULL;
+    Py_RETURN_NONE;
+}
+
+static PyObject *PyToken_attrJoin(PyToken *self, PyObject *args)
+{
+    PyObject *name = NULL;
+    const char *value = NULL;
+    Py_ssize_t value_len = 0;
+    if (!PyArg_ParseTuple(args, "Os#", &name, &value, &value_len)) return NULL;
+
+    PyObject *existing = PyDict_GetItemWithError(self->attrs, name);
+    if (existing == NULL) {
+        if (PyErr_Occurred()) return NULL;
+        PyObject *v = PyUnicode_DecodeUTF8(value, value_len, "strict");
+        if (v == NULL) return NULL;
+        int rc = PyDict_SetItem(self->attrs, name, v);
+        Py_DECREF(v);
+        if (rc < 0) return NULL;
+        Py_RETURN_NONE;
+    }
+    if (!PyUnicode_Check(existing)) {
+        PyErr_SetString(PyExc_TypeError,
+            "existing attr 'name' is not a str");
+        return NULL;
+    }
+    PyObject *sep = PyUnicode_FromString(" ");
+    PyObject *tail = PyUnicode_DecodeUTF8(value, value_len, "strict");
+    PyObject *joined = NULL;
+    if (sep != NULL && tail != NULL) {
+        PyObject *tmp = PyUnicode_Concat(existing, sep);
+        if (tmp != NULL) {
+            joined = PyUnicode_Concat(tmp, tail);
+            Py_DECREF(tmp);
+        }
+    }
+    Py_XDECREF(sep);
+    Py_XDECREF(tail);
+    if (joined == NULL) return NULL;
+    int rc = PyDict_SetItem(self->attrs, name, joined);
+    Py_DECREF(joined);
+    if (rc < 0) return NULL;
+    Py_RETURN_NONE;
+}
+
+static PyMemberDef PyToken_members[] = {
+    { "type",     T_OBJECT_EX, offsetof(PyToken, type),     0, "token type" },
+    { "tag",      T_OBJECT_EX, offsetof(PyToken, tag),      0, "HTML tag" },
+    { "nesting",  T_INT,       offsetof(PyToken, nesting),  0, "nesting" },
+    { "attrs",    T_OBJECT_EX, offsetof(PyToken, attrs),    0, "attrs dict" },
+    { "map",      T_OBJECT_EX, offsetof(PyToken, map),      0, "source map" },
+    { "level",    T_INT,       offsetof(PyToken, level),    0, "level" },
+    { "children", T_OBJECT_EX, offsetof(PyToken, children), 0, "children" },
+    { "content",  T_OBJECT_EX, offsetof(PyToken, content),  0, "content" },
+    { "markup",   T_OBJECT_EX, offsetof(PyToken, markup),   0, "markup" },
+    { "info",     T_OBJECT_EX, offsetof(PyToken, info),     0, "info" },
+    { "meta",     T_OBJECT_EX, offsetof(PyToken, meta),     0, "meta dict" },
+    { "block",    T_BOOL,      offsetof(PyToken, block),    0, "block" },
+    { "hidden",   T_BOOL,      offsetof(PyToken, hidden),   0, "hidden" },
+    { NULL }
+};
+
+static int PyToken_init(PyToken *self, PyObject *args, PyObject *kwargs);
+static PyObject *PyToken_richcompare(PyObject *a, PyObject *b, int op);
+static PyObject *PyToken_from_dict(PyTypeObject *cls, PyObject *dict_obj);
+static PyObject *PyToken_copy(PyToken *self, PyObject *args, PyObject *kwargs);
+
+static PyMethodDef PyToken_methods[] = {
+    { "as_dict", (PyCFunction)PyToken_as_dict,
+      METH_VARARGS | METH_KEYWORDS,
+      "as_dict(*, children=True, as_upstream=True, meta_serializer=None, "
+      "filter=None, dict_factory=dict)" },
+    { "attrIndex", (PyCFunction)PyToken_attrIndex, METH_O,
+      "attrIndex(name) -> int" },
+    { "attrItems", (PyCFunction)PyToken_attrItems, METH_NOARGS,
+      "attrItems() -> list[tuple[str, value]]" },
+    { "attrGet", (PyCFunction)PyToken_attrGet, METH_O,
+      "attrGet(name) -> value | None" },
+    { "attrSet", (PyCFunction)PyToken_attrSet, METH_VARARGS,
+      "attrSet(name, value) -> None" },
+    { "attrPush", (PyCFunction)PyToken_attrPush, METH_O,
+      "attrPush((name, value)) -> None" },
+    { "attrJoin", (PyCFunction)PyToken_attrJoin, METH_VARARGS,
+      "attrJoin(name, value) -> None" },
+    { "copy", (PyCFunction)PyToken_copy, METH_VARARGS | METH_KEYWORDS,
+      "copy(**changes) -> Token: shallow copy with optional overrides." },
+    { "from_dict", (PyCFunction)PyToken_from_dict,
+      METH_O | METH_CLASS,
+      "from_dict(d) -> Token: rebuild a Token from `as_dict()` output." },
+    { NULL }
+};
+
+static PyTypeObject PyToken_Type = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name        = "_mdit_c.Token",
+    .tp_basicsize   = sizeof(PyToken),
+    .tp_flags       = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_BASETYPE,
+    .tp_doc         = "Token copied from the mdit-c token stream.",
+    .tp_dealloc     = (destructor)PyToken_dealloc,
+    .tp_members     = PyToken_members,
+    .tp_methods     = PyToken_methods,
+    .tp_init        = (initproc)PyToken_init,
+    .tp_new         = PyType_GenericNew,
+    .tp_richcompare = PyToken_richcompare,
+};
+
+static PyObject *PyToken_from_mdit(const mdit_token *t);
+
+static int token_set_defaults(PyToken *self)
+{
+    self->type = PyUnicode_FromString("");
+    self->tag = PyUnicode_FromString("");
+    self->nesting = 0;
+    self->attrs = PyDict_New();
+    Py_INCREF(Py_None);
+    self->map = Py_None;
+    self->level = 0;
+    Py_INCREF(Py_None);
+    self->children = Py_None;
+    self->content = PyUnicode_FromString("");
+    self->markup = PyUnicode_FromString("");
+    self->info = PyUnicode_FromString("");
+    self->meta = PyDict_New();
+    self->block = 0;
+    self->hidden = 0;
+    if (self->type == NULL || self->tag == NULL || self->attrs == NULL ||
+        self->content == NULL || self->markup == NULL || self->info == NULL ||
+        self->meta == NULL) {
+        return -1;
+    }
+    return 0;
+}
+
+static int PyToken_init(PyToken *self, PyObject *args, PyObject *kwargs)
+{
+    static char *kwlist[] = {
+        "type", "tag", "nesting", "attrs", "map", "level", "children",
+        "content", "markup", "info", "meta", "block", "hidden", NULL
+    };
+    PyObject *type = NULL;
+    PyObject *tag = NULL;
+    int nesting = 0;
+    PyObject *attrs = Py_None;
+    PyObject *map = Py_None;
+    int level = 0;
+    PyObject *children = Py_None;
+    PyObject *content = NULL;
+    PyObject *markup = NULL;
+    PyObject *info = NULL;
+    PyObject *meta = Py_None;
+    int block = 0;
+    int hidden = 0;
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "UUi|OOiOUUUOpp",
+                                     kwlist, &type, &tag, &nesting,
+                                     &attrs, &map, &level, &children,
+                                     &content, &markup, &info, &meta,
+                                     &block, &hidden)) {
+        return -1;
+    }
+    if (nesting < -1 || nesting > 1) {
+        PyErr_SetString(PyExc_ValueError,
+                        "nesting must be in {-1, 0, 1}");
+        return -1;
+    }
+
+    /* attrs: None | dict | list[[k,v], ...]  →  owned dict (convert_attrs). */
+    PyObject *attrs_dict;
+    if (attrs == Py_None) {
+        attrs_dict = PyDict_New();
+    } else if (PyDict_Check(attrs)) {
+        attrs_dict = PyDict_Copy(attrs);
+    } else if (PyList_Check(attrs) || PyTuple_Check(attrs)) {
+        attrs_dict = PyObject_CallFunctionObjArgs(
+            (PyObject *)&PyDict_Type, attrs, NULL);
+    } else {
+        PyErr_SetString(PyExc_TypeError,
+            "attrs must be None, a dict, or a list of [key, value] pairs");
+        return -1;
+    }
+    if (attrs_dict == NULL) return -1;
+
+    /* meta: None | dict → owned dict. */
+    PyObject *meta_dict;
+    if (meta == Py_None) {
+        meta_dict = PyDict_New();
+    } else if (PyDict_Check(meta)) {
+        meta_dict = PyDict_Copy(meta);
+    } else {
+        Py_DECREF(attrs_dict);
+        PyErr_SetString(PyExc_TypeError, "meta must be None or a dict");
+        return -1;
+    }
+    if (meta_dict == NULL) {
+        Py_DECREF(attrs_dict);
+        return -1;
+    }
+
+    /* map: None | sequence-of-int → None | list[int]. */
+    PyObject *map_value;
+    if (map == Py_None) {
+        Py_INCREF(Py_None);
+        map_value = Py_None;
+    } else {
+        map_value = PySequence_List(map);
+        if (map_value == NULL) {
+            Py_DECREF(attrs_dict);
+            Py_DECREF(meta_dict);
+            return -1;
+        }
+    }
+
+    /* children: None | sequence-of-Token → None | list[Token]. */
+    PyObject *children_value;
+    if (children == Py_None) {
+        Py_INCREF(Py_None);
+        children_value = Py_None;
+    } else {
+        children_value = PySequence_List(children);
+        if (children_value == NULL) {
+            Py_DECREF(attrs_dict);
+            Py_DECREF(meta_dict);
+            Py_DECREF(map_value);
+            return -1;
+        }
+    }
+
+    /* Default empty strings for content/markup/info if omitted. */
+    PyObject *content_value = content;
+    PyObject *markup_value  = markup;
+    PyObject *info_value    = info;
+    if (content_value == NULL) content_value = PyUnicode_FromString("");
+    else                       Py_INCREF(content_value);
+    if (markup_value  == NULL) markup_value  = PyUnicode_FromString("");
+    else                       Py_INCREF(markup_value);
+    if (info_value    == NULL) info_value    = PyUnicode_FromString("");
+    else                       Py_INCREF(info_value);
+    if (content_value == NULL || markup_value == NULL || info_value == NULL) {
+        Py_DECREF(attrs_dict); Py_DECREF(meta_dict);
+        Py_DECREF(map_value); Py_DECREF(children_value);
+        Py_XDECREF(content_value); Py_XDECREF(markup_value); Py_XDECREF(info_value);
+        return -1;
+    }
+
+    Py_INCREF(type);
+    Py_INCREF(tag);
+    Py_XSETREF(self->type, type);
+    Py_XSETREF(self->tag, tag);
+    self->nesting = nesting;
+    Py_XSETREF(self->attrs, attrs_dict);
+    Py_XSETREF(self->map, map_value);
+    self->level = level;
+    Py_XSETREF(self->children, children_value);
+    Py_XSETREF(self->content, content_value);
+    Py_XSETREF(self->markup, markup_value);
+    Py_XSETREF(self->info, info_value);
+    Py_XSETREF(self->meta, meta_dict);
+    self->block = block ? 1 : 0;
+    self->hidden = hidden ? 1 : 0;
+    return 0;
+}
+
+/* Equality / inequality compare token instances by every field. Python
+ * tests rely on this: ``Token.from_dict(token.as_dict()) == token``. */
+static PyObject *PyToken_richcompare(PyObject *a, PyObject *b, int op)
+{
+    if ((op != Py_EQ && op != Py_NE) ||
+        !PyObject_TypeCheck(a, &PyToken_Type) ||
+        !PyObject_TypeCheck(b, &PyToken_Type)) {
+        Py_RETURN_NOTIMPLEMENTED;
+    }
+    PyToken *x = (PyToken *)a;
+    PyToken *y = (PyToken *)b;
+    int eq = 1;
+#define CMP_OBJ(field) do {                                            \
+        int rc = PyObject_RichCompareBool(x->field, y->field, Py_EQ);  \
+        if (rc < 0) return NULL;                                       \
+        if (!rc) eq = 0;                                               \
+    } while (0)
+    CMP_OBJ(type); CMP_OBJ(tag); CMP_OBJ(attrs); CMP_OBJ(map);
+    CMP_OBJ(children); CMP_OBJ(content); CMP_OBJ(markup);
+    CMP_OBJ(info); CMP_OBJ(meta);
+#undef CMP_OBJ
+    if (x->nesting != y->nesting) eq = 0;
+    if (x->level   != y->level)   eq = 0;
+    if (x->block   != y->block)   eq = 0;
+    if (x->hidden  != y->hidden)  eq = 0;
+    if (op == Py_NE) eq = !eq;
+    if (eq) Py_RETURN_TRUE;
+    Py_RETURN_FALSE;
+}
+
+/* `Token.from_dict(d)` — recursively reconstruct from an as_dict()-like
+ * mapping, including children. The dict is shallow-copied because we
+ * mutate the `children` key (replace dicts with Token instances) before
+ * forwarding it as kwargs. */
+static PyObject *PyToken_from_dict(PyTypeObject *cls, PyObject *dict_obj)
+{
+    if (!PyDict_Check(dict_obj)) {
+        PyErr_SetString(PyExc_TypeError, "from_dict: expected a dict");
+        return NULL;
+    }
+    PyObject *args = PyTuple_New(0);
+    PyObject *kwargs = PyDict_Copy(dict_obj);
+    if (args == NULL || kwargs == NULL) {
+        Py_XDECREF(args); Py_XDECREF(kwargs);
+        return NULL;
+    }
+    PyObject *children_obj = PyDict_GetItemString(kwargs, "children");
+    if (children_obj != NULL && children_obj != Py_None) {
+        Py_ssize_t n = PyObject_Length(children_obj);
+        if (n < 0) { Py_DECREF(args); Py_DECREF(kwargs); return NULL; }
+        PyObject *converted = PyList_New(n);
+        if (converted == NULL) {
+            Py_DECREF(args); Py_DECREF(kwargs); return NULL;
+        }
+        for (Py_ssize_t i = 0; i < n; ++i) {
+            PyObject *raw = PySequence_GetItem(children_obj, i);
+            if (raw == NULL) {
+                Py_DECREF(converted); Py_DECREF(args); Py_DECREF(kwargs);
+                return NULL;
+            }
+            PyObject *child;
+            if (PyDict_Check(raw)) {
+                child = PyToken_from_dict(cls, raw);
+            } else {
+                Py_INCREF(raw);
+                child = raw;
+            }
+            Py_DECREF(raw);
+            if (child == NULL) {
+                Py_DECREF(converted); Py_DECREF(args); Py_DECREF(kwargs);
+                return NULL;
+            }
+            PyList_SET_ITEM(converted, i, child);
+        }
+        if (PyDict_SetItemString(kwargs, "children", converted) < 0) {
+            Py_DECREF(converted); Py_DECREF(args); Py_DECREF(kwargs);
+            return NULL;
+        }
+        Py_DECREF(converted);
+    }
+    PyObject *obj = PyObject_Call((PyObject *)cls, args, kwargs);
+    Py_DECREF(args);
+    Py_DECREF(kwargs);
+    return obj;
+}
+
+/* Shallow copy with optional field overrides — mirrors upstream
+ * ``Token.copy(**changes)`` (built on dataclasses.replace). */
+static PyObject *PyToken_copy(PyToken *self, PyObject *args, PyObject *kwargs)
+{
+    if (args != NULL && PyTuple_GET_SIZE(args) != 0) {
+        PyErr_SetString(PyExc_TypeError,
+            "Token.copy() takes only keyword arguments");
+        return NULL;
+    }
+    PyObject *base = PyDict_New();
+    if (base == NULL) return NULL;
+#define BASE_BORROWED(name, obj) do {                                   \
+        if (PyDict_SetItemString(base, name, obj) < 0) {                \
+            Py_DECREF(base); return NULL;                               \
+        }                                                               \
+    } while (0)
+    BASE_BORROWED("type", self->type);
+    BASE_BORROWED("tag", self->tag);
+    PyObject *nesting = PyLong_FromLong(self->nesting);
+    if (nesting == NULL) { Py_DECREF(base); return NULL; }
+    if (PyDict_SetItemString(base, "nesting", nesting) < 0) {
+        Py_DECREF(nesting); Py_DECREF(base); return NULL;
+    }
+    Py_DECREF(nesting);
+    BASE_BORROWED("attrs", self->attrs);
+    BASE_BORROWED("map", self->map);
+    PyObject *level = PyLong_FromLong(self->level);
+    if (level == NULL) { Py_DECREF(base); return NULL; }
+    if (PyDict_SetItemString(base, "level", level) < 0) {
+        Py_DECREF(level); Py_DECREF(base); return NULL;
+    }
+    Py_DECREF(level);
+    BASE_BORROWED("children", self->children);
+    BASE_BORROWED("content",  self->content);
+    BASE_BORROWED("markup",   self->markup);
+    BASE_BORROWED("info",     self->info);
+    BASE_BORROWED("meta",     self->meta);
+    PyObject *block_obj = self->block ? Py_True : Py_False;
+    PyObject *hidden_obj = self->hidden ? Py_True : Py_False;
+    BASE_BORROWED("block",  block_obj);
+    BASE_BORROWED("hidden", hidden_obj);
+#undef BASE_BORROWED
+    if (kwargs != NULL && PyDict_Update(base, kwargs) < 0) {
+        Py_DECREF(base); return NULL;
+    }
+    PyObject *empty = PyTuple_New(0);
+    PyObject *result = NULL;
+    if (empty != NULL) {
+        result = PyObject_Call((PyObject *)Py_TYPE(self), empty, base);
+        Py_DECREF(empty);
+    }
+    Py_DECREF(base);
+    return result;
+}
+
+static PyObject *py_children_from_mdit(const mdit_token *t)
+{
+    if (t->children == NULL) Py_RETURN_NONE;
+    PyObject *list = PyList_New((Py_ssize_t)t->children_len);
+    if (list == NULL) return NULL;
+    for (size_t i = 0; i < t->children_len; ++i) {
+        PyObject *child = PyToken_from_mdit(&t->children[i]);
+        if (child == NULL) {
+            Py_DECREF(list);
+            return NULL;
+        }
+        PyList_SET_ITEM(list, (Py_ssize_t)i, child);
+    }
+    return list;
+}
+
+static PyObject *PyToken_from_mdit(const mdit_token *t)
+{
+    PyToken *obj = PyObject_New(PyToken, &PyToken_Type);
+    if (obj == NULL) return NULL;
+    memset((char *)obj + sizeof(PyObject), 0, sizeof(*obj) - sizeof(PyObject));
+
+    obj->type     = py_from_mdit_str(t->type);
+    obj->tag      = py_from_mdit_str(t->tag);
+    obj->nesting  = (int)t->nesting;
+    obj->attrs    = py_map_to_dict(&t->attrs);
+    obj->level    = (int)t->level;
+    obj->children = py_children_from_mdit(t);
+    obj->content  = py_from_mdit_str(t->content);
+    obj->markup   = py_from_mdit_str(t->markup);
+    obj->info     = py_from_mdit_str(t->info);
+    obj->meta     = py_map_to_dict(&t->meta);
+    obj->block    = t->block ? 1 : 0;
+    obj->hidden   = t->hidden ? 1 : 0;
+
+    if (t->has_map) {
+        obj->map = Py_BuildValue("[ii]", (int)t->map.begin, (int)t->map.end);
+    } else {
+        Py_INCREF(Py_None);
+        obj->map = Py_None;
+    }
+
+    if (obj->type == NULL || obj->tag == NULL || obj->attrs == NULL ||
+        obj->map == NULL || obj->children == NULL || obj->content == NULL ||
+        obj->markup == NULL || obj->info == NULL || obj->meta == NULL) {
+        Py_DECREF(obj);
+        return NULL;
+    }
+    return (PyObject *)obj;
+}
 
 /* ------------------------------------------------------------------ */
 /* MarkdownIt object                                                  */
@@ -273,6 +1027,59 @@ static PyObject *PyMarkdownIt_render(PyMarkdownIt *self, PyObject *arg)
 }
 
 /* ------------------------------------------------------------------ */
+/* parse()                                                             */
+/* ------------------------------------------------------------------ */
+
+static PyObject *PyMarkdownIt_parse(PyMarkdownIt *self, PyObject *args,
+                                    PyObject *kwargs)
+{
+    static char *kwlist[] = { "src", "env", NULL };
+    PyObject *src_obj = NULL;
+    PyObject *env_obj = NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|O", kwlist,
+                                     &src_obj, &env_obj)) {
+        return NULL;
+    }
+    (void)env_obj; /* env support lands with the fuller plugin surface. */
+
+    if (!self->initialized) {
+        PyErr_SetString(PyExc_RuntimeError, "MarkdownIt not initialized");
+        return NULL;
+    }
+
+    Py_ssize_t n = 0;
+    const char *s = PyUnicode_AsUTF8AndSize(src_obj, &n);
+    if (s == NULL) return NULL;
+
+    mdit_vec_token tokens;
+    mdit_vec_token_init(&tokens, &self->arena);
+    mdit_str src = { s, (size_t)n };
+    if (!mdit_md_parse(&self->md, src, NULL, &tokens)) {
+        mdit_vec_token_destroy(&tokens);
+        PyErr_SetString(PyExc_RuntimeError, "mdit_md_parse failed");
+        return NULL;
+    }
+
+    PyObject *list = PyList_New((Py_ssize_t)tokens.len);
+    if (list == NULL) {
+        mdit_vec_token_destroy(&tokens);
+        return NULL;
+    }
+    for (size_t i = 0; i < tokens.len; ++i) {
+        PyObject *tok = PyToken_from_mdit(&tokens.data[i]);
+        if (tok == NULL) {
+            Py_DECREF(list);
+            mdit_vec_token_destroy(&tokens);
+            return NULL;
+        }
+        PyList_SET_ITEM(list, (Py_ssize_t)i, tok);
+    }
+
+    mdit_vec_token_destroy(&tokens);
+    return list;
+}
+
+/* ------------------------------------------------------------------ */
 /* enable() / disable()                                                */
 /* ------------------------------------------------------------------ */
 
@@ -443,6 +1250,9 @@ static PyGetSetDef PyMarkdownIt_getsetters[] = {
 };
 
 static PyMethodDef PyMarkdownIt_methods[] = {
+    { "parse",   (PyCFunction)PyMarkdownIt_parse,
+      METH_VARARGS | METH_KEYWORDS,
+      "parse(src, env=None) -> list[Token]: parse Markdown to tokens." },
     { "render",  (PyCFunction)PyMarkdownIt_render,  METH_O,
       "render(src) -> str: parse + render Markdown to HTML." },
     { "enable",  (PyCFunction)PyMarkdownIt_enable,  METH_VARARGS,
@@ -481,10 +1291,18 @@ static PyModuleDef mdit_c_moduledef = {
 
 PyMODINIT_FUNC PyInit__mdit_c(void)
 {
+    if (PyType_Ready(&PyToken_Type) < 0) return NULL;
     if (PyType_Ready(&PyMarkdownIt_Type) < 0) return NULL;
 
     PyObject *m = PyModule_Create(&mdit_c_moduledef);
     if (m == NULL) return NULL;
+
+    Py_INCREF(&PyToken_Type);
+    if (PyModule_AddObject(m, "Token", (PyObject *)&PyToken_Type) < 0) {
+        Py_DECREF(&PyToken_Type);
+        Py_DECREF(m);
+        return NULL;
+    }
 
     Py_INCREF(&PyMarkdownIt_Type);
     if (PyModule_AddObject(m, "MarkdownIt",

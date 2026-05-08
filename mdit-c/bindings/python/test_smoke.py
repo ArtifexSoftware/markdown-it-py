@@ -16,8 +16,9 @@ The smoke test does two things:
    hard-coded expected value (so the test doesn't depend on
    ``markdown_it`` being importable in the test interpreter).
 2. If ``markdown_it`` *is* importable, additionally cross-checks
-   byte-for-byte parity against ``markdown_it.MarkdownIt('commonmark')``
-   for the same inputs.
+   byte-for-byte render parity and token ``as_dict(as_upstream=True)``
+   parity against ``markdown_it.MarkdownIt('commonmark')`` for the same
+   inputs.
 
 Exit codes:
     0  all assertions held
@@ -42,6 +43,11 @@ def main(argv: list[str]) -> int:
         print(f"smoke: stage directory not found: {stage}", file=sys.stderr)
         return 2
     sys.path.insert(0, str(stage))
+    # Make the in-tree `markdown_it` package importable when the smoke
+    # test is run from CTest's build-directory working dir. CI also
+    # installs the package, but this keeps local developer runs useful.
+    repo_root = Path(__file__).resolve().parents[3]
+    sys.path.insert(1, str(repo_root))
 
     try:
         import mdit_c
@@ -105,6 +111,49 @@ def main(argv: list[str]) -> int:
               f"  got: {al_html!r}", file=sys.stderr)
         return 3
 
+    # The parse API returns Token objects with upstream-compatible
+    # attributes and `as_dict(as_upstream=True)`.
+    parsed = md.parse("# hi\n")
+    if [tok.type for tok in parsed] != ["heading_open", "inline", "heading_close"]:
+        print(f"smoke[parse] unexpected token types: {parsed!r}", file=sys.stderr)
+        return 3
+    if parsed[1].children is None or parsed[1].children[0].content != "hi":
+        print("smoke[parse] missing inline text child", file=sys.stderr)
+        return 3
+    first_dict = parsed[0].as_dict(as_upstream=True)
+    if first_dict["attrs"] is not None or first_dict["map"] != [0, 1]:
+        print(f"smoke[parse] bad as_dict output: {first_dict!r}", file=sys.stderr)
+        return 3
+    parsed[0].attrSet("data-smoke", "ok")
+    if parsed[0].attrGet("data-smoke") != "ok":
+        print("smoke[parse] attrSet/attrGet mismatch", file=sys.stderr)
+        return 3
+    parsed[0].attrJoin("class", "one")
+    parsed[0].attrJoin("class", "two")
+    if parsed[0].attrGet("class") != "one two":
+        print("smoke[parse] attrJoin mismatch", file=sys.stderr)
+        return 3
+    if parsed[0].attrIndex("data-smoke") < 0 or not parsed[0].attrItems():
+        print("smoke[parse] attrIndex/attrItems mismatch", file=sys.stderr)
+        return 3
+
+    # Direct Token construction + round-trip helpers mirror
+    # tests/test_api/test_token.py closely.
+    tok = mdit_c.Token("name", "tag", 0, children=[mdit_c.Token("other", "tag2", 0)])
+    tok.attrSet("a", "b")
+    tok.attrJoin("a", "c")
+    tok.attrPush(("x", "y"))
+    if tok.attrGet("a") != "b c" or tok.attrIndex("x") != 1:
+        print("smoke[token] attr helper mismatch", file=sys.stderr)
+        return 3
+    rebuilt = mdit_c.Token.from_dict(tok.as_dict())
+    if tok != rebuilt:
+        print("smoke[token] from_dict/as_dict round-trip mismatch", file=sys.stderr)
+        return 3
+    if tok.copy(content="changed").content != "changed":
+        print("smoke[token] copy override mismatch", file=sys.stderr)
+        return 3
+
     # Optional: cross-check byte-parity against upstream Python.
     try:
         from markdown_it import MarkdownIt as PyMarkdownIt
@@ -127,11 +176,19 @@ def main(argv: list[str]) -> int:
     py_md = PyMarkdownIt("commonmark")
     c_md = mdit_c.MarkdownIt("commonmark")
     for src in parity_inputs:
-        want = py_md.render(src)
-        got = c_md.render(src)
-        if got != want:
+        want_html = py_md.render(src)
+        got_html = c_md.render(src)
+        if got_html != want_html:
             print(f"smoke[parity] mismatch for {src!r}:\n"
-                  f"  got:  {got!r}\n  want: {want!r}", file=sys.stderr)
+                  f"  got:  {got_html!r}\n  want: {want_html!r}", file=sys.stderr)
+            return 4
+
+        want_tokens = [t.as_dict(as_upstream=True) for t in py_md.parse(src)]
+        got_tokens = [t.as_dict(as_upstream=True) for t in c_md.parse(src)]
+        if got_tokens != want_tokens:
+            print(f"smoke[token parity] mismatch for {src!r}:\n"
+                  f"  got:  {got_tokens!r}\n  want: {want_tokens!r}",
+                  file=sys.stderr)
             return 4
 
     print(f"smoke: PASS ({len(cases_commonmark)} commonmark + "
