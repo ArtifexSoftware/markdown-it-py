@@ -185,6 +185,54 @@ def main(argv: list[str]) -> int:
         print("smoke[token] copy override mismatch", file=sys.stderr)
         return 3
 
+    # Ruler facades expose upstream-shaped rule enumeration and
+    # per-chain toggling. The top-level reset_rules context restores
+    # all four chains (core/block/inline/inline2).
+    md_zero = mdit_c.MarkdownIt("zero")
+    all_rules = md_zero.get_all_rules()
+    if "heading" not in all_rules["block"] or "fragments_join" not in all_rules["inline2"]:
+        print(f"smoke[ruler] get_all_rules missing expected names: {all_rules!r}",
+              file=sys.stderr)
+        return 3
+    if md_zero.block.ruler.enable("heading") != ["heading"]:
+        print("smoke[ruler] block.ruler.enable did not return found rule",
+              file=sys.stderr)
+        return 3
+    if "heading" not in md_zero.get_active_rules()["block"]:
+        print("smoke[ruler] heading not enabled on block chain", file=sys.stderr)
+        return 3
+    active_with_heading = md_zero.get_active_rules()
+    with md_zero.reset_rules():
+        md_zero.disable("inline")
+        if "inline" in md_zero.get_active_rules()["core"]:
+            print("smoke[ruler] reset_rules body did not disable inline",
+                  file=sys.stderr)
+            return 3
+    if md_zero.get_active_rules() != active_with_heading:
+        # The context should restore to the state at entry (after the
+        # explicit heading enable above), not to construction defaults.
+        restored = md_zero.get_active_rules()
+        print(f"smoke[ruler] reset_rules restore mismatch: {restored!r}",
+              file=sys.stderr)
+        return 3
+
+    # Custom render rules are Python callbacks bound to md.renderer.
+    # They receive Token copies, options, and env just like upstream,
+    # and can delegate to self.renderToken after mutating the local
+    # token copy.
+    def paragraph_open(self, tokens, idx, options, env):
+        assert env == {"smoke": True}
+        tokens[idx].attrSet("data-render", "ok")
+        return self.renderToken(tokens, idx, options, env)
+
+    md_custom = mdit_c.MarkdownIt()
+    md_custom.add_render_rule("paragraph_open", paragraph_open)
+    rendered_custom = md_custom.render("hello", {"smoke": True})
+    if rendered_custom != '<p data-render="ok">hello</p>\n':
+        print(f"smoke[renderer] custom paragraph_open mismatch: "
+              f"{rendered_custom!r}", file=sys.stderr)
+        return 3
+
     # Optional: cross-check byte-parity against upstream Python.
     try:
         from markdown_it import MarkdownIt as PyMarkdownIt

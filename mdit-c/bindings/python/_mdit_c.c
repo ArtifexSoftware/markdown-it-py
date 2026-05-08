@@ -53,6 +53,7 @@
 #include <string.h>
 
 #include "arena.h"
+#include "env.h"
 #include "linkifier.h"
 #include "main.h"
 #include "ruler.h"
@@ -820,7 +821,81 @@ typedef struct {
     mdit_md    md;
     int        initialized;     /* 1 once mdit_md_init succeeded */
     PyObject  *options_dict;    /* persistent live mirror of options */
+    PyObject  *render_callbacks;/* token type -> Python render callback */
 } PyMarkdownIt;
+
+typedef struct {
+    PyMarkdownIt *md;
+    PyObject     *env;
+} PyRenderContext;
+
+static int build_options_dict(PyMarkdownIt *self);
+
+static bool py_render_rule_bridge(
+    mdit_renderer *r,
+    const mdit_token *tokens, size_t n_tokens, size_t idx,
+    const mdit_renderer_options *opts,
+    void *env,
+    mdit_buf *out)
+{
+    (void)opts;
+    PyRenderContext *ctx = (PyRenderContext *)env;
+    if (ctx == NULL || ctx->md == NULL || ctx->md->render_callbacks == NULL) {
+        return mdit_renderer_render_token(r, tokens, n_tokens, idx, opts, env, out);
+    }
+
+    PyObject *key = PyUnicode_FromStringAndSize(
+        tokens[idx].type.data, (Py_ssize_t)tokens[idx].type.len);
+    if (key == NULL) return false;
+    PyObject *callback = PyDict_GetItemWithError(ctx->md->render_callbacks, key);
+    Py_DECREF(key);
+    if (callback == NULL) {
+        if (PyErr_Occurred()) return false;
+        return mdit_renderer_render_token(r, tokens, n_tokens, idx, opts, env, out);
+    }
+
+    PyObject *py_tokens = PyList_New((Py_ssize_t)n_tokens);
+    if (py_tokens == NULL) return false;
+    for (size_t i = 0; i < n_tokens; ++i) {
+        PyObject *tok = PyToken_from_mdit(&tokens[i]);
+        if (tok == NULL) {
+            Py_DECREF(py_tokens);
+            return false;
+        }
+        PyList_SET_ITEM(py_tokens, (Py_ssize_t)i, tok);
+    }
+
+    PyObject *py_idx = PyLong_FromSize_t(idx);
+    if (py_idx == NULL) {
+        Py_DECREF(py_tokens);
+        return false;
+    }
+    if (ctx->md->options_dict == NULL && build_options_dict(ctx->md) < 0) {
+        Py_DECREF(py_idx);
+        Py_DECREF(py_tokens);
+        return false;
+    }
+    PyObject *py_env = (ctx->env == NULL) ? Py_None : ctx->env;
+    PyObject *result = PyObject_CallFunctionObjArgs(
+        callback, py_tokens, py_idx, ctx->md->options_dict, py_env, NULL);
+    Py_DECREF(py_idx);
+    Py_DECREF(py_tokens);
+    if (result == NULL) return false;
+    if (!PyUnicode_Check(result)) {
+        Py_DECREF(result);
+        PyErr_SetString(PyExc_TypeError, "render rule must return a str");
+        return false;
+    }
+    Py_ssize_t n = 0;
+    const char *s = PyUnicode_AsUTF8AndSize(result, &n);
+    if (s == NULL) {
+        Py_DECREF(result);
+        return false;
+    }
+    bool ok = mdit_buf_append(out, s, (size_t)n);
+    Py_DECREF(result);
+    return ok;
+}
 
 /* Apply the named preset to the wrapped mdit_md, mirroring upstream
  * Python presets. We translate the upstream JSON-ish config into the C
@@ -841,12 +916,27 @@ static int apply_preset(PyMarkdownIt *self, const char *preset)
         self->md.options.html        = true;
         self->md.options.xhtml_out   = true;
         /* CommonMark drops the GFM `table` block rule and the
-         * `strikethrough` inline rules. */
+         * `strikethrough` inline rules, and the optional typographer /
+         * linkify core rules. */
         mdit_str table_name  = MDIT_STR_LIT("table");
-        mdit_str strike_name = MDIT_STR_LIT("strikethrough");
-        (void)mdit_ruler_disable(self->md.block.ruler,    &table_name,  1, true);
-        (void)mdit_ruler_disable(self->md.inline_p.ruler, &strike_name, 1, true);
-        (void)mdit_ruler_disable(self->md.inline_p.ruler2,&strike_name, 1, true);
+        mdit_str inline_optional[] = {
+            MDIT_STR_LIT("linkify"),
+            MDIT_STR_LIT("strikethrough"),
+        };
+        mdit_str core_optional[] = {
+            MDIT_STR_LIT("linkify"),
+            MDIT_STR_LIT("replacements"),
+            MDIT_STR_LIT("smartquotes"),
+        };
+        (void)mdit_ruler_disable(self->md.block.ruler, &table_name, 1, true);
+        (void)mdit_ruler_disable(self->md.inline_p.ruler, inline_optional,
+                                 sizeof inline_optional / sizeof *inline_optional,
+                                 true);
+        (void)mdit_ruler_disable(self->md.inline_p.ruler2, &inline_optional[1],
+                                 1, true);
+        (void)mdit_ruler_disable(self->md.core.ruler, core_optional,
+                                 sizeof core_optional / sizeof *core_optional,
+                                 true);
         return 0;
     }
 
@@ -863,6 +953,13 @@ static int apply_preset(PyMarkdownIt *self, const char *preset)
         self->md.options.html        = true;
         self->md.options.xhtml_out   = true;
         self->md.options.linkify     = true;
+        mdit_str core_typographer[] = {
+            MDIT_STR_LIT("replacements"),
+            MDIT_STR_LIT("smartquotes"),
+        };
+        (void)mdit_ruler_disable(self->md.core.ruler, core_typographer,
+                                 sizeof core_typographer / sizeof *core_typographer,
+                                 true);
         if (self->md.linkifier == NULL) {
             mdit_md_set_linkifier(&self->md, mdit_linkifier_default());
         }
@@ -882,9 +979,10 @@ static int apply_preset(PyMarkdownIt *self, const char *preset)
          * except a small "always-on" allowlist (paragraph, text,
          * normalize, block, inline). We snapshot each ruler's current
          * names, then disable everything not in the allowlist. */
-        const char *block_keep[]  = { "paragraph" };
-        const char *inline_keep[] = { "text" };
-        const char *core_keep[]   = { "normalize", "block", "inline" };
+        const char *block_keep[]   = { "paragraph" };
+        const char *inline_keep[]  = { "text" };
+        const char *inline2_keep[] = { "balance_pairs", "fragments_join" };
+        const char *core_keep[]    = { "normalize", "block", "inline", "text_join" };
         const struct {
             mdit_ruler  *r;
             const char **keep;
@@ -892,8 +990,8 @@ static int apply_preset(PyMarkdownIt *self, const char *preset)
         } rulers[] = {
             { self->md.block.ruler,    block_keep,  1 },
             { self->md.inline_p.ruler, inline_keep, 1 },
-            { self->md.inline_p.ruler2, NULL,       0 },
-            { self->md.core.ruler,     core_keep,   3 },
+            { self->md.inline_p.ruler2, inline2_keep, 2 },
+            { self->md.core.ruler,     core_keep,   4 },
         };
         for (size_t i = 0; i < sizeof rulers / sizeof *rulers; ++i) {
             size_t n = 0;
@@ -1315,6 +1413,7 @@ static int PyMarkdownIt_init(PyMarkdownIt *self, PyObject *args, PyObject *kwarg
 
 static void PyMarkdownIt_dealloc(PyMarkdownIt *self)
 {
+    Py_CLEAR(self->render_callbacks);
     Py_CLEAR(self->options_dict);
     if (self->initialized) {
         mdit_md_destroy(&self->md);
@@ -1328,15 +1427,24 @@ static void PyMarkdownIt_dealloc(PyMarkdownIt *self)
 /* render()                                                            */
 /* ------------------------------------------------------------------ */
 
-static PyObject *PyMarkdownIt_render(PyMarkdownIt *self, PyObject *arg)
+static PyObject *PyMarkdownIt_render(PyMarkdownIt *self, PyObject *args,
+                                     PyObject *kwargs)
 {
+    static char *kwlist[] = { "src", "env", NULL };
+    PyObject *src_obj = NULL;
+    PyObject *env_obj = NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|O", kwlist,
+                                     &src_obj, &env_obj)) {
+        return NULL;
+    }
+
     if (!self->initialized) {
         PyErr_SetString(PyExc_RuntimeError, "MarkdownIt not initialized");
         return NULL;
     }
 
     Py_ssize_t   n = 0;
-    const char  *s = PyUnicode_AsUTF8AndSize(arg, &n);
+    const char  *s = PyUnicode_AsUTF8AndSize(src_obj, &n);
     if (s == NULL) return NULL;
 
     if (sync_options_from_dict(self) < 0) return NULL;
@@ -1350,10 +1458,32 @@ static PyObject *PyMarkdownIt_render(PyMarkdownIt *self, PyObject *arg)
     mdit_buf out;
     mdit_buf_init(&out);
     mdit_str src = { s, (size_t)n };
-    bool ok = mdit_md_render(&self->md, src, NULL, &out);
+    mdit_env c_env;
+    mdit_env_init(&c_env, self->md.arena);
+    mdit_vec_token tokens;
+    mdit_vec_token_init(&tokens, self->md.arena);
+    if (!mdit_md_parse(&self->md, src, &c_env, &tokens)) {
+        mdit_vec_token_destroy(&tokens);
+        mdit_buf_destroy(&out);
+        if (!PyErr_Occurred()) {
+            PyErr_SetString(PyExc_RuntimeError, "mdit_md_parse failed");
+        }
+        return NULL;
+    }
+    mdit_renderer_options ropts;
+    ropts.xhtmlOut           = self->md.options.xhtml_out;
+    ropts.breaks             = self->md.options.breaks;
+    ropts.tasklists_editable = self->md.options.tasklists_editable;
+    ropts.langPrefix         = self->md.options.lang_prefix;
+    PyRenderContext render_ctx = { self, env_obj };
+    bool ok = mdit_renderer_render(self->md.renderer, tokens.data, tokens.len,
+                                   &ropts, &render_ctx, &out);
+    mdit_vec_token_destroy(&tokens);
     if (!ok) {
         mdit_buf_destroy(&out);
-        PyErr_SetString(PyExc_RuntimeError, "mdit_md_render failed");
+        if (!PyErr_Occurred()) {
+            PyErr_SetString(PyExc_RuntimeError, "mdit_renderer_render failed");
+        }
         return NULL;
     }
     PyObject *result = PyUnicode_DecodeUTF8(
@@ -1528,6 +1658,183 @@ static PyObject *PyMarkdownIt_disable(PyMarkdownIt *self, PyObject *args)
     return toggle_rules(self, args, 0);
 }
 
+static mdit_ruler *select_ruler(PyMarkdownIt *self, const char *chain)
+{
+    if (strcmp(chain, "core") == 0) return self->md.core.ruler;
+    if (strcmp(chain, "block") == 0) return self->md.block.ruler;
+    if (strcmp(chain, "inline") == 0) return self->md.inline_p.ruler;
+    if (strcmp(chain, "inline2") == 0) return self->md.inline_p.ruler2;
+    return NULL;
+}
+
+static PyObject *str_array_to_pylist(const mdit_str *names, size_t n)
+{
+    PyObject *list = PyList_New((Py_ssize_t)n);
+    if (list == NULL) return NULL;
+    for (size_t i = 0; i < n; ++i) {
+        PyObject *s = PyUnicode_FromStringAndSize(
+            names[i].data, (Py_ssize_t)names[i].len);
+        if (s == NULL) {
+            Py_DECREF(list);
+            return NULL;
+        }
+        PyList_SET_ITEM(list, (Py_ssize_t)i, s);
+    }
+    return list;
+}
+
+static PyObject *PyMarkdownIt_ruler_get_all(PyMarkdownIt *self, PyObject *arg)
+{
+    const char *chain = PyUnicode_AsUTF8(arg);
+    if (chain == NULL) return NULL;
+    mdit_ruler *r = select_ruler(self, chain);
+    if (r == NULL) {
+        PyErr_Format(PyExc_KeyError, "unknown ruler chain: %s", chain);
+        return NULL;
+    }
+    size_t n = 0;
+    const mdit_str *names = mdit_ruler_all_rule_names(r, &n);
+    return str_array_to_pylist(names, n);
+}
+
+static PyObject *PyMarkdownIt_ruler_get_active(PyMarkdownIt *self, PyObject *arg)
+{
+    const char *chain = PyUnicode_AsUTF8(arg);
+    if (chain == NULL) return NULL;
+    mdit_ruler *r = select_ruler(self, chain);
+    if (r == NULL) {
+        PyErr_Format(PyExc_KeyError, "unknown ruler chain: %s", chain);
+        return NULL;
+    }
+    size_t n = 0;
+    const mdit_str *names = mdit_ruler_active_rule_names(r, &n);
+    return str_array_to_pylist(names, n);
+}
+
+static PyObject *ruler_toggle_chain(PyMarkdownIt *self, PyObject *args,
+                                    PyObject *kwargs, int mode)
+{
+    static char *kwlist[] = { "chain", "names", "ignoreInvalid", NULL };
+    const char *chain = NULL;
+    PyObject *names_obj = NULL;
+    int ignore = 0;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sO|p", kwlist,
+                                     &chain, &names_obj, &ignore)) {
+        return NULL;
+    }
+    mdit_ruler *r = select_ruler(self, chain);
+    if (r == NULL) {
+        PyErr_Format(PyExc_KeyError, "unknown ruler chain: %s", chain);
+        return NULL;
+    }
+
+    mdit_str *names = NULL;
+    size_t n = 0;
+    PyObject *holder = NULL;
+    if (collect_names(names_obj, &names, &n, &holder) < 0) return NULL;
+
+    PyObject *found = PyList_New(0);
+    if (found == NULL) {
+        PyMem_Free(names);
+        Py_DECREF(holder);
+        return NULL;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        if (!mdit_ruler_has(r, names[i])) {
+            if (!ignore) {
+                Py_DECREF(found);
+                PyMem_Free(names);
+                Py_DECREF(holder);
+                PyErr_Format(PyExc_KeyError,
+                    "Rules manager: invalid rule name %.*s",
+                    (int)names[i].len, names[i].data);
+                return NULL;
+            }
+            continue;
+        }
+        PyObject *s = PyUnicode_FromStringAndSize(
+            names[i].data, (Py_ssize_t)names[i].len);
+        if (s == NULL || PyList_Append(found, s) < 0) {
+            Py_XDECREF(s);
+            Py_DECREF(found);
+            PyMem_Free(names);
+            Py_DECREF(holder);
+            return NULL;
+        }
+        Py_DECREF(s);
+    }
+
+    int rc;
+    if (mode == 0) {
+        rc = mdit_ruler_disable(r, names, n, true);
+    } else if (mode == 1) {
+        rc = mdit_ruler_enable(r, names, n, true);
+    } else {
+        rc = mdit_ruler_enable_only(r, names, n, true);
+    }
+    PyMem_Free(names);
+    Py_DECREF(holder);
+    if (rc < 0) {
+        Py_DECREF(found);
+        PyErr_SetString(PyExc_RuntimeError, "ruler mutation failed");
+        return NULL;
+    }
+    return found;
+}
+
+static PyObject *PyMarkdownIt_ruler_enable(PyMarkdownIt *self, PyObject *args,
+                                           PyObject *kwargs)
+{
+    return ruler_toggle_chain(self, args, kwargs, 1);
+}
+
+static PyObject *PyMarkdownIt_ruler_disable(PyMarkdownIt *self, PyObject *args,
+                                            PyObject *kwargs)
+{
+    return ruler_toggle_chain(self, args, kwargs, 0);
+}
+
+static PyObject *PyMarkdownIt_ruler_enable_only(PyMarkdownIt *self, PyObject *args,
+                                                PyObject *kwargs)
+{
+    return ruler_toggle_chain(self, args, kwargs, 2);
+}
+
+static PyObject *PyMarkdownIt_add_render_rule(PyMarkdownIt *self, PyObject *args)
+{
+    const char *name = NULL;
+    Py_ssize_t name_len = 0;
+    PyObject *callback = NULL;
+    if (!PyArg_ParseTuple(args, "s#O", &name, &name_len, &callback)) {
+        return NULL;
+    }
+    if (!PyCallable_Check(callback)) {
+        PyErr_SetString(PyExc_TypeError, "render rule callback must be callable");
+        return NULL;
+    }
+    if (self->render_callbacks == NULL) {
+        self->render_callbacks = PyDict_New();
+        if (self->render_callbacks == NULL) return NULL;
+    }
+    PyObject *key = PyUnicode_FromStringAndSize(name, name_len);
+    if (key == NULL) return NULL;
+    if (PyDict_SetItem(self->render_callbacks, key, callback) < 0) {
+        Py_DECREF(key);
+        return NULL;
+    }
+    Py_DECREF(key);
+    mdit_str token_type;
+    if (arena_dup_str(self, name, (size_t)name_len, &token_type) < 0) {
+        return NULL;
+    }
+    if (!mdit_renderer_add_rule(self->md.renderer, token_type,
+                                py_render_rule_bridge)) {
+        PyErr_SetString(PyExc_RuntimeError, "mdit_renderer_add_rule failed");
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 /* ------------------------------------------------------------------ */
 /* options getter / setter                                             */
 /* ------------------------------------------------------------------ */
@@ -1601,12 +1908,29 @@ static PyMethodDef PyMarkdownIt_methods[] = {
     { "parse",   (PyCFunction)PyMarkdownIt_parse,
       METH_VARARGS | METH_KEYWORDS,
       "parse(src, env=None) -> list[Token]: parse Markdown to tokens." },
-    { "render",  (PyCFunction)PyMarkdownIt_render,  METH_O,
+    { "render",  (PyCFunction)PyMarkdownIt_render,
+      METH_VARARGS | METH_KEYWORDS,
       "render(src) -> str: parse + render Markdown to HTML." },
     { "enable",  (PyCFunction)PyMarkdownIt_enable,  METH_VARARGS,
       "enable(names, ignoreInvalid=False) -> self: enable rule(s)." },
     { "disable", (PyCFunction)PyMarkdownIt_disable, METH_VARARGS,
       "disable(names, ignoreInvalid=False) -> self: disable rule(s)." },
+    { "_ruler_get_all", (PyCFunction)PyMarkdownIt_ruler_get_all, METH_O,
+      "_ruler_get_all(chain) -> list[str]." },
+    { "_ruler_get_active", (PyCFunction)PyMarkdownIt_ruler_get_active, METH_O,
+      "_ruler_get_active(chain) -> list[str]." },
+    { "_ruler_enable", (PyCFunction)PyMarkdownIt_ruler_enable,
+      METH_VARARGS | METH_KEYWORDS,
+      "_ruler_enable(chain, names, ignoreInvalid=False) -> list[str]." },
+    { "_ruler_disable", (PyCFunction)PyMarkdownIt_ruler_disable,
+      METH_VARARGS | METH_KEYWORDS,
+      "_ruler_disable(chain, names, ignoreInvalid=False) -> list[str]." },
+    { "_ruler_enable_only", (PyCFunction)PyMarkdownIt_ruler_enable_only,
+      METH_VARARGS | METH_KEYWORDS,
+      "_ruler_enable_only(chain, names, ignoreInvalid=False) -> list[str]." },
+    { "_add_render_rule", (PyCFunction)PyMarkdownIt_add_render_rule,
+      METH_VARARGS,
+      "_add_render_rule(name, callback) -> None." },
     { NULL }
 };
 

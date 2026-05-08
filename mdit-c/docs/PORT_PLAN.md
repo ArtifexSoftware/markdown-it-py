@@ -338,7 +338,7 @@ cases produce identical HTML to Python.
       and `md_cli_python_parity` (a Python-driven byte-equality sweep
       against the upstream CLI; auto-skips if `markdown_it` isn't
       importable in the test interpreter).
-- [~] **CPython extension** (`mdit-c/bindings/python/`) — slices 1–3
+- [~] **CPython extension** (`mdit-c/bindings/python/`) — slices 1–4
       shipped. `MDIT_BUILD_PYBIND=ON` builds an internal `_mdit_c`
       module via CMake's `Python3_add_library(... WITH_SOABI ...)` and
       stages it next to a small pure-Python `mdit_c` package wrapper.
@@ -400,9 +400,22 @@ cases produce identical HTML to Python.
       The `_DEBUG` swap around `<Python.h>` lets the extension build
       under MSVC's Debug config without `python3XX_d.lib`. CI gained
       the `MDIT_BUILD_PYBIND=ON` flag in the matrix + sanitizer jobs.
-      Renderer/ruler Python facades (custom `add_render_rule`, plugin
-      hooks, `SyntaxTreeNode`, env-populating `parse`) remain
-      follow-up slices.
+      Slice 4 layered Python-side `Ruler` and `RendererHTML` facades
+      on top of the C extension: `md.{core,block,inline}.ruler`
+      expose `get_all_rules`, `get_active_rules`, `enable`, `disable`,
+      `enableOnly`; `md.add_render_rule(name, fn)` registers a Python
+      callback that the C renderer invokes through a bridge (passing
+      `Token` copies, the live options dict, and the `env` argument
+      from `render(src, env=...)`); `md.use(plugin, ...)` and
+      `md.reset_rules()` mirror the upstream chainable API. Parser
+      rule callbacks (`ruler.before/after/at/push` executing Python
+      functions over real `StateBlock`/`StateInline`/`StateCore`
+      shims), `parseInline` / `renderInline`, env-populating
+      `parse`, and `SyntaxTreeNode` remain follow-up slices. New
+      tests: `upstream_tests/test_api_facades.py` covers
+      `get_all_rules`, `get_active_rules`, `enable`/`disable`,
+      `reset_rules`, custom `add_render_rule` delegating back to
+      `self.renderToken`, and plugin installation via `md.use(...)`.
 - [x] **CMake install rules + package config + pkg-config**. Toggled by
       `MDIT_INSTALL` (default ON). Installs `mdit_static` (renamed
       `libmdit.{a,lib}`) under `CMAKE_INSTALL_LIBDIR`, the curated
