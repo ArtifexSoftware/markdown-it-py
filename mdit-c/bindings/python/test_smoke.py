@@ -95,6 +95,37 @@ def main(argv: list[str]) -> int:
                   f"  got:  {got!r}\n  want: {want!r}", file=sys.stderr)
             return 3
 
+    # The persistent ``options`` dict is live: mutating it after
+    # construction propagates to the C engine on the next render call.
+    md_live = mdit_c.MarkdownIt("commonmark")
+    if md_live.options["typographer"] is not False:
+        print("smoke[options] typographer not False by default for commonmark",
+              file=sys.stderr)
+        return 3
+    md_live.enable("replacements").enable("smartquotes")
+    md_live.options["typographer"] = True
+    sq_html = md_live.render('"hello"')
+    if sq_html != "<p>\u201chello\u201d</p>\n":
+        print(f"smoke[options] live typographer not picked up: {sq_html!r}",
+              file=sys.stderr)
+        return 3
+
+    # gfm-like / gfm-like2 presets must select the right rule set +
+    # option flags so an upstream-shaped MarkdownIt(config="gfm-like2")
+    # works out of the box.
+    md_gfm_like = mdit_c.MarkdownIt("gfm-like")
+    if not md_gfm_like.options["linkify"]:
+        print("smoke[gfm-like] linkify not enabled by preset",
+              file=sys.stderr)
+        return 3
+    md_gfm2 = mdit_c.MarkdownIt("gfm-like2")
+    for key in ("tasklists", "alerts", "strikethrough_single_tilde",
+                "linkify"):
+        if not md_gfm2.options[key]:
+            print(f"smoke[gfm-like2] {key} not set by preset",
+                  file=sys.stderr)
+            return 3
+
     # Tasklists + alerts opt-ins.
     md_gfm = mdit_c.MarkdownIt("default", {"tasklists": True, "alerts": True})
     tlc_src = "- [x] done\n- [ ] todo\n"

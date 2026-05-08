@@ -87,4 +87,21 @@ if(MDIT_BUILD_TESTS)
     set_tests_properties(python_smoke PROPERTIES
         LABELS "python"
     )
+
+    # ----------------------------------------------------------------
+    # Upstream-pytest harness — runs the upstream test corpus
+    # (CommonMark spec + tests/test_port/fixtures + a curated subset
+    # of tests/test_port) against the C engine. The driver script
+    # exits 0 with a SKIP marker when ``pytest`` or ``markdown_it``
+    # aren't importable, so dependency-light hosts still pass.
+    # ----------------------------------------------------------------
+    add_test(
+        NAME python_pytest
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/run_upstream_pytest.py"
+                "${MDIT_PY_STAGE}"
+    )
+    set_tests_properties(python_pytest PROPERTIES
+        LABELS "python"
+    )
 endif()

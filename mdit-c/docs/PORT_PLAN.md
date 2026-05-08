@@ -338,35 +338,71 @@ cases produce identical HTML to Python.
       and `md_cli_python_parity` (a Python-driven byte-equality sweep
       against the upstream CLI; auto-skips if `markdown_it` isn't
       importable in the test interpreter).
-- [~] **CPython extension** (`mdit-c/bindings/python/`) — slices 1–2
+- [~] **CPython extension** (`mdit-c/bindings/python/`) — slices 1–3
       shipped. `MDIT_BUILD_PYBIND=ON` builds an internal `_mdit_c`
       module via CMake's `Python3_add_library(... WITH_SOABI ...)` and
       stages it next to a small pure-Python `mdit_c` package wrapper.
-      The exposed surface today is `MarkdownIt(preset='default',
-      options=None)`, `.render(src) -> str`, `.parse(src, env=None) ->
-      list[Token]`, the read/write `.options` dict, and `.enable` /
-      `.disable` against any of the four rulers (core / block / inline
-      / inline ruler2). Presets mirror the upstream Python ones
-      (`default`, `commonmark`, `zero`); options accept the same
+      The exposed surface today is `MarkdownIt(config='commonmark',
+      options=None)` (with the `preset=` / `options_update=` keyword
+      aliases upstream uses), `.render(src) -> str`,
+      `.parse(src, env=None) -> list[Token]`, the live `.options`
+      mapping, and `.enable` / `.disable` against any of the four
+      rulers (core / block / inline / inline ruler2). Slice 3 made
+      `.options` a *persistent* dict that's resynced into the C
+      `mdit_options` on every parse/render — so upstream's
+      `md.options['typographer'] = True` mutation pattern works — and
+      grew the preset table to cover `default` / `js-default`,
+      `commonmark` (the new constructor default, matching upstream),
+      `zero`, `gfm-like`, and `gfm-like2`. Options accept the same
       camelCase keys upstream uses (`maxNesting`, `xhtmlOut`,
-      `langPrefix`, …). Slice 2 added a copied Python `Token` type with
-      public fields matching `markdown_it.token.Token`, a constructor
+      `langPrefix`, `quotes` as a 4-codepoint string or 4-element
+      sequence, `linkify`, `typographer`, `tasklists`, `alerts`,
+      `strikethrough_single_tilde`, `tasklists_editable`, …). Slice 2
+      had already added a copied Python `Token` type with public
+      fields matching `markdown_it.token.Token`, a constructor
       accepting the same core fields, equality, `copy(**changes)`,
       `from_dict(...)`, `as_dict(...)` support (including upstream
-      attrs-as-list/null and recursive child conversion), and the common
-      attr helpers (`attrIndex`, `attrItems`, `attrGet`, `attrSet`,
-      `attrPush`, `attrJoin`).
-      `python_smoke` now covers 7 hand-curated `commonmark` render
-      cases, 2 `default`-preset render cases, GFM tasklists + alerts
-      behaviour, token field / attr-helper sanity checks, and a
-      14-input byte-parity sweep against both
-      `markdown_it.MarkdownIt('commonmark').render(...)` and
-      `[t.as_dict(as_upstream=True) for t in ...parse(...)]`.
+      attrs-as-list/null and recursive child conversion), and the
+      common attr helpers (`attrIndex`, `attrItems`, `attrGet`,
+      `attrSet`, `attrPush`, `attrJoin`).
+      Test coverage:
+      * `python_smoke` covers 7 hand-curated `commonmark` render
+        cases, 2 `default`-preset render cases, GFM tasklists +
+        alerts behaviour, the `gfm-like` / `gfm-like2` preset
+        wirings, mutating `md.options['typographer']` post-init,
+        token field / attr-helper sanity checks, and a 14-input
+        byte-parity sweep against both
+        `markdown_it.MarkdownIt('commonmark').render(...)` and
+        `[t.as_dict(as_upstream=True) for t in ...parse(...)]`.
+      * **`python_pytest`** (slice 3) drives the upstream Python test
+        corpus directly via `pytest`. `mdit-c/bindings/python/upstream_tests/`
+        ships a conftest + four parametrised modules: full CommonMark
+        spec corpus (~650 cases through `tests/test_cmark_spec/commonmark.json`),
+        `test_no_end_newline.py`, a `test_misc.py::test_ordered_list_info`
+        port, and a 13-fixture `test_fixtures.py` that mirrors
+        upstream `tests/test_port/test_fixtures.py`
+        (`linkify`, `smartquotes`, `typographer`, `tables`,
+        `commonmark_extras`, `normalize`, `fatal`, `strikethrough`,
+        `strikethrough_single_tilde`, `disable_code_block`,
+        `tasklists`, `alerts`, `issue-fixes`). On Windows + Python 3.12
+        all 904 collected items pass byte-parity. The CTest entry is
+        driven by `run_upstream_pytest.py`, which exits 0 with a SKIP
+        marker when `pytest` or `markdown_it` isn't importable so
+        dependency-light hosts still pass.
+      Slice 3 also surfaced and fixed a behavioural divergence in the
+      C parser: when the `code` block rule is disabled, indented
+      content now falls through to the remaining rules (fence,
+      heading, table, …) instead of being routed into the indented
+      code-block path — matching upstream. The block parser threads
+      a `code_enabled` flag (sourced from the new
+      `mdit_ruler_is_rule_enabled` helper) into
+      `mdit_state_block_is_code_block` for that purpose.
       The `_DEBUG` swap around `<Python.h>` lets the extension build
       under MSVC's Debug config without `python3XX_d.lib`. CI gained
       the `MDIT_BUILD_PYBIND=ON` flag in the matrix + sanitizer jobs.
-      Full upstream `pytest` hookup, renderer/ruler Python facades, and
-      `SyntaxTreeNode` remain follow-up slices.
+      Renderer/ruler Python facades (custom `add_render_rule`, plugin
+      hooks, `SyntaxTreeNode`, env-populating `parse`) remain
+      follow-up slices.
 - [x] **CMake install rules + package config + pkg-config**. Toggled by
       `MDIT_INSTALL` (default ON). Installs `mdit_static` (renamed
       `libmdit.{a,lib}`) under `CMAKE_INSTALL_LIBDIR`, the curated

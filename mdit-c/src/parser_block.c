@@ -2175,6 +2175,14 @@ bool mdit_parser_block_parse(mdit_parser_block *p,
     if (!mdit_state_block_init(&state, p->arena, src, md, env, out_tokens)) {
         return false;
     }
+    /* Mirror upstream: when the `code` block rule is disabled, indented
+     * lines no longer auto-trigger code-block detection, so individual
+     * block rules (fence, heading, table, …) get a chance to match
+     * indented content. We surface this through the state-level
+     * ``code_enabled`` flag that ``mdit_state_block_is_code_block``
+     * consults. */
+    state.code_enabled = mdit_ruler_is_rule_enabled(p->ruler,
+                                                    MDIT_STR_LIT("code"));
     mdit_parser_block_tokenize(p, &state, state.line, state.lineMax);
     return true;
 }

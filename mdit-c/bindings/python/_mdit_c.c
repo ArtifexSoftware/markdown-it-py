@@ -1,10 +1,10 @@
 /*
  * _mdit_c.c — minimal CPython extension wrapping the mdit-c engine.
  *
- * Surface (Phase 5, slice 1):
+ * Surface (Phase 5, slices 1–3):
  *
  *   class MarkdownIt:
- *       def __init__(self, preset: str = "default", options: dict | None = None) -> None: ...
+ *       def __init__(self, preset: str = "commonmark", options: dict | None = None) -> None: ...
  *       def parse(self, src: str, env: object | None = None) -> list[Token]: ...
  *       def render(self, src: str) -> str: ...
  *       @property
@@ -14,12 +14,17 @@
  *       def enable(self, names: str | list[str]) -> "MarkdownIt": ...
  *       def disable(self, names: str | list[str]) -> "MarkdownIt": ...
  *
- * The presets recognised today are ``default``, ``commonmark``, and
- * ``zero``. The ``options`` dict accepts the same scalar keys upstream
- * uses (``html``, ``xhtmlOut``, ``breaks``, ``linkify``, ``typographer``,
- * ``maxNesting``, ``langPrefix``, ``strikethrough_single_tilde``,
- * ``tasklists``, ``tasklists_editable``, ``alerts``); unknown keys are
- * silently ignored to match upstream's `MarkdownIt(opts)` behaviour.
+ * The default preset matches upstream's
+ * ``markdown_it.MarkdownIt(config="commonmark")`` behaviour. Other
+ * recognised preset names: ``default`` / ``js-default``, ``zero``,
+ * ``gfm-like``, ``gfm-like2``. The ``options`` dict accepts the same
+ * keys upstream uses (``html``, ``xhtmlOut``, ``breaks``, ``linkify``,
+ * ``typographer``, ``maxNesting``, ``langPrefix``, ``quotes``,
+ * ``strikethrough_single_tilde``, ``tasklists``, ``tasklists_editable``,
+ * ``alerts``). Mutations of the live ``md.options`` dict propagate
+ * into the C engine on the next parse/render call. Unknown keys are
+ * silently ignored to match upstream's ``MarkdownIt(options=...)``
+ * behaviour.
  *
  * The full Python ``markdown_it.MarkdownIt`` API surface (rulers,
  * plugins, renderer customisation, SyntaxTreeNode) is intentionally NOT
@@ -813,7 +818,8 @@ typedef struct {
     PyObject_HEAD
     mdit_arena arena;
     mdit_md    md;
-    int        initialized;  /* 1 once mdit_md_init succeeded */
+    int        initialized;     /* 1 once mdit_md_init succeeded */
+    PyObject  *options_dict;    /* persistent live mirror of options */
 } PyMarkdownIt;
 
 /* Apply the named preset to the wrapped mdit_md, mirroring upstream
@@ -823,7 +829,10 @@ typedef struct {
 static int apply_preset(PyMarkdownIt *self, const char *preset)
 {
     /* `default` matches mdit_md_init's defaults — nothing to do. */
-    if (preset == NULL || strcmp(preset, "default") == 0) {
+    if (preset == NULL ||
+        strcmp(preset, "default") == 0 ||
+        strcmp(preset, "js-default") == 0 ||
+        strcmp(preset, "js_default") == 0) {
         return 0;
     }
 
@@ -838,6 +847,33 @@ static int apply_preset(PyMarkdownIt *self, const char *preset)
         (void)mdit_ruler_disable(self->md.block.ruler,    &table_name,  1, true);
         (void)mdit_ruler_disable(self->md.inline_p.ruler, &strike_name, 1, true);
         (void)mdit_ruler_disable(self->md.inline_p.ruler2,&strike_name, 1, true);
+        return 0;
+    }
+
+    /* gfm-like and gfm-like2 mirror markdown_it.presets.gfm_like /
+     * gfm_like2: start from CommonMark, re-enable the GFM `table` +
+     * `strikethrough` rules (which `commonmark` had stripped), and turn
+     * on `linkify` + `html`. gfm-like2 layers on the markdown-it-py
+     * additions: tasklists, alerts, single-tilde strikethrough. */
+    if (strcmp(preset, "gfm-like")  == 0 ||
+        strcmp(preset, "gfm_like")  == 0 ||
+        strcmp(preset, "gfm-like2") == 0 ||
+        strcmp(preset, "gfm_like2") == 0) {
+        self->md.options.max_nesting = 20;
+        self->md.options.html        = true;
+        self->md.options.xhtml_out   = true;
+        self->md.options.linkify     = true;
+        if (self->md.linkifier == NULL) {
+            mdit_md_set_linkifier(&self->md, mdit_linkifier_default());
+        }
+        const bool gfm2 = (strcmp(preset, "gfm-like2") == 0 ||
+                           strcmp(preset, "gfm_like2") == 0);
+        if (gfm2) {
+            self->md.options.tasklists                  = true;
+            self->md.options.tasklists_editable         = false;
+            self->md.options.alerts                     = true;
+            self->md.options.strikethrough_single_tilde = true;
+        }
         return 0;
     }
 
@@ -880,7 +916,8 @@ static int apply_preset(PyMarkdownIt *self, const char *preset)
     }
 
     PyErr_Format(PyExc_ValueError,
-        "unknown preset %.200s (expected 'default', 'commonmark', or 'zero')",
+        "unknown preset %.200s (expected 'default', 'commonmark', 'zero', "
+        "'gfm-like', or 'gfm-like2')",
         preset);
     return -1;
 }
@@ -896,48 +933,252 @@ static int as_bool(PyObject *obj, int *out)
     return 1;
 }
 
+/* Helper: copy bytes into the parser arena and return them as an
+ * mdit_str view. Returns 0 on success, -1 on allocation failure. */
+static int arena_dup_str(PyMarkdownIt *self, const char *s, size_t n,
+                         mdit_str *out)
+{
+    if (n == 0 || s == NULL) {
+        *out = (mdit_str){ "", 0 };
+        return 0;
+    }
+    char *buf = (char *)mdit_arena_alloc_aligned(&self->arena, n, 1);
+    if (buf == NULL) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    memcpy(buf, s, n);
+    out->data = buf;
+    out->len  = n;
+    return 0;
+}
+
+/* Bool-keyed options that map 1:1 to a `mdit_options` flag. */
+static const struct option_bool_key {
+    const char *key;
+    size_t      offset;
+} k_option_bool_keys[] = {
+    { "html",                       offsetof(mdit_options, html)                       },
+    { "xhtmlOut",                   offsetof(mdit_options, xhtml_out)                  },
+    { "breaks",                     offsetof(mdit_options, breaks)                     },
+    { "linkify",                    offsetof(mdit_options, linkify)                    },
+    { "typographer",                offsetof(mdit_options, typographer)                },
+    { "strikethrough_single_tilde", offsetof(mdit_options, strikethrough_single_tilde) },
+    { "tasklists",                  offsetof(mdit_options, tasklists)                  },
+    { "tasklists_editable",         offsetof(mdit_options, tasklists_editable)         },
+    { "alerts",                     offsetof(mdit_options, alerts)                     },
+};
+
+/* Build (or rebuild) ``self->options_dict`` so it mirrors the current
+ * C ``mdit_options`` state. The dict identity is preserved when an
+ * existing dict is present, matching upstream behaviour where
+ * ``MarkdownIt.options`` is a single MutableMapping that user code can
+ * cache and mutate. */
+static int build_options_dict(PyMarkdownIt *self)
+{
+    PyObject *d = self->options_dict;
+    if (d == NULL) {
+        d = PyDict_New();
+        if (d == NULL) return -1;
+        self->options_dict = d;
+    } else {
+        PyDict_Clear(d);
+    }
+
+    PyObject *v;
+
+    v = PyLong_FromLong(self->md.options.max_nesting);
+    if (v == NULL) return -1;
+    int rc = PyDict_SetItemString(d, "maxNesting", v);
+    Py_DECREF(v);
+    if (rc < 0) return -1;
+
+    for (size_t i = 0; i < sizeof k_option_bool_keys / sizeof *k_option_bool_keys; ++i) {
+        bool *slot = (bool *)((char *)&self->md.options
+                              + k_option_bool_keys[i].offset);
+        v = *slot ? Py_True : Py_False;
+        if (PyDict_SetItemString(d, k_option_bool_keys[i].key, v) < 0)
+            return -1;
+    }
+
+    v = PyUnicode_FromStringAndSize(self->md.options.lang_prefix.data,
+                                    (Py_ssize_t)self->md.options.lang_prefix.len);
+    if (v == NULL) return -1;
+    rc = PyDict_SetItemString(d, "langPrefix", v);
+    Py_DECREF(v);
+    if (rc < 0) return -1;
+
+    /* Build the upstream-shaped quotes string: 4 codepoints concatenated
+     * (open-double, close-double, open-single, close-single). */
+    char qbuf[64];
+    size_t qlen = 0;
+    for (int i = 0; i < 4; ++i) {
+        size_t n = self->md.options.quotes[i].len;
+        if (qlen + n > sizeof qbuf) { qlen = 0; break; }
+        memcpy(qbuf + qlen, self->md.options.quotes[i].data, n);
+        qlen += n;
+    }
+    v = PyUnicode_FromStringAndSize(qbuf, (Py_ssize_t)qlen);
+    if (v == NULL) return -1;
+    rc = PyDict_SetItemString(d, "quotes", v);
+    Py_DECREF(v);
+    if (rc < 0) return -1;
+
+    /* `highlight` is preserved as-is so user code can stash a callable
+     * alongside the rest of the options; the C engine itself doesn't
+     * call back into Python yet, but tests that touch
+     * ``options['highlight']`` shouldn't ``KeyError``. */
+    if (PyDict_SetItemString(d, "highlight", Py_None) < 0) return -1;
+
+    return 0;
+}
+
 /* Apply an `options` dict on top of the current preset state. Unknown
- * keys are ignored (upstream behaviour). */
+ * keys are ignored (upstream behaviour). Used both at `__init__` time
+ * (to fold the user-supplied options dict into the preset baseline)
+ * and at parse/render time (to re-sync the live ``options_dict`` into
+ * the C ``mdit_options`` struct). */
 static int apply_options_dict(PyMarkdownIt *self, PyObject *opts)
 {
     if (opts == NULL || opts == Py_None) return 0;
-    if (!PyDict_Check(opts)) {
+    if (!PyDict_Check(opts) && !PyMapping_Check(opts)) {
         PyErr_SetString(PyExc_TypeError,
-            "options must be a dict or None");
+            "options must be a mapping or None");
         return -1;
     }
 
-    const struct {
-        const char *key;
-        size_t      offset;     /* offset of bool field in mdit_options */
-    } bool_keys[] = {
-        { "html",                       offsetof(mdit_options, html)                       },
-        { "xhtmlOut",                   offsetof(mdit_options, xhtml_out)                  },
-        { "breaks",                     offsetof(mdit_options, breaks)                     },
-        { "linkify",                    offsetof(mdit_options, linkify)                    },
-        { "typographer",                offsetof(mdit_options, typographer)                },
-        { "strikethrough_single_tilde", offsetof(mdit_options, strikethrough_single_tilde) },
-        { "tasklists",                  offsetof(mdit_options, tasklists)                  },
-        { "tasklists_editable",         offsetof(mdit_options, tasklists_editable)         },
-        { "alerts",                     offsetof(mdit_options, alerts)                     },
-    };
-    for (size_t i = 0; i < sizeof bool_keys / sizeof *bool_keys; ++i) {
-        PyObject *v = PyDict_GetItemString(opts, bool_keys[i].key);
+    /* Use PyMapping_GetItemString-like access so subclasses of dict
+     * (e.g. upstream's OptionsDict, or any MutableMapping) work too. */
+    for (size_t i = 0; i < sizeof k_option_bool_keys / sizeof *k_option_bool_keys; ++i) {
+        PyObject *v = PyMapping_GetItemString(opts, k_option_bool_keys[i].key);
+        if (v == NULL) {
+            if (PyErr_Occurred()) PyErr_Clear();
+            continue;
+        }
         int parsed;
         int got = as_bool(v, &parsed);
+        Py_DECREF(v);
         if (got < 0) return -1;
         if (got > 0) {
             bool *slot = (bool *)((char *)&self->md.options
-                                  + bool_keys[i].offset);
+                                  + k_option_bool_keys[i].offset);
             *slot = parsed ? true : false;
         }
     }
 
-    PyObject *mn = PyDict_GetItemString(opts, "maxNesting");
-    if (mn != NULL && mn != Py_None) {
-        long val = PyLong_AsLong(mn);
-        if (val == -1 && PyErr_Occurred()) return -1;
-        self->md.options.max_nesting = (int32_t)val;
+    PyObject *mn = PyMapping_GetItemString(opts, "maxNesting");
+    if (mn != NULL) {
+        if (mn != Py_None) {
+            long val = PyLong_AsLong(mn);
+            if (val == -1 && PyErr_Occurred()) {
+                Py_DECREF(mn);
+                return -1;
+            }
+            self->md.options.max_nesting = (int32_t)val;
+        }
+        Py_DECREF(mn);
+    } else if (PyErr_Occurred()) {
+        PyErr_Clear();
+    }
+
+    PyObject *lp = PyMapping_GetItemString(opts, "langPrefix");
+    if (lp != NULL) {
+        if (lp != Py_None) {
+            if (!PyUnicode_Check(lp)) {
+                Py_DECREF(lp);
+                PyErr_SetString(PyExc_TypeError, "langPrefix must be a str");
+                return -1;
+            }
+            Py_ssize_t n = 0;
+            const char *s = PyUnicode_AsUTF8AndSize(lp, &n);
+            if (s == NULL) { Py_DECREF(lp); return -1; }
+            mdit_str dst;
+            if (arena_dup_str(self, s, (size_t)n, &dst) < 0) {
+                Py_DECREF(lp);
+                return -1;
+            }
+            self->md.options.lang_prefix = dst;
+        }
+        Py_DECREF(lp);
+    } else if (PyErr_Occurred()) {
+        PyErr_Clear();
+    }
+
+    PyObject *quotes = PyMapping_GetItemString(opts, "quotes");
+    if (quotes != NULL && quotes != Py_None) {
+        /* upstream accepts either a 4-codepoint string ("“”‘’") or a
+         * 4-element sequence of strings (one per quote slot). */
+        if (PyUnicode_Check(quotes)) {
+            Py_ssize_t cp_len = PyUnicode_GetLength(quotes);
+            if (cp_len < 4) {
+                Py_DECREF(quotes);
+                PyErr_SetString(PyExc_ValueError,
+                    "quotes string must have at least 4 codepoints");
+                return -1;
+            }
+            for (int i = 0; i < 4; ++i) {
+                PyObject *one = PySequence_GetSlice(quotes, i, i + 1);
+                if (one == NULL) { Py_DECREF(quotes); return -1; }
+                Py_ssize_t n = 0;
+                const char *s = PyUnicode_AsUTF8AndSize(one, &n);
+                if (s == NULL) {
+                    Py_DECREF(one);
+                    Py_DECREF(quotes);
+                    return -1;
+                }
+                mdit_str dst;
+                if (arena_dup_str(self, s, (size_t)n, &dst) < 0) {
+                    Py_DECREF(one);
+                    Py_DECREF(quotes);
+                    return -1;
+                }
+                self->md.options.quotes[i] = dst;
+                Py_DECREF(one);
+            }
+        } else if (PySequence_Check(quotes)) {
+            if (PySequence_Length(quotes) < 4) {
+                Py_DECREF(quotes);
+                PyErr_SetString(PyExc_ValueError,
+                    "quotes sequence must have at least 4 elements");
+                return -1;
+            }
+            for (int i = 0; i < 4; ++i) {
+                PyObject *one = PySequence_GetItem(quotes, i);
+                if (one == NULL) { Py_DECREF(quotes); return -1; }
+                if (!PyUnicode_Check(one)) {
+                    Py_DECREF(one);
+                    Py_DECREF(quotes);
+                    PyErr_SetString(PyExc_TypeError,
+                        "quotes elements must be strings");
+                    return -1;
+                }
+                Py_ssize_t n = 0;
+                const char *s = PyUnicode_AsUTF8AndSize(one, &n);
+                if (s == NULL) {
+                    Py_DECREF(one);
+                    Py_DECREF(quotes);
+                    return -1;
+                }
+                mdit_str dst;
+                if (arena_dup_str(self, s, (size_t)n, &dst) < 0) {
+                    Py_DECREF(one);
+                    Py_DECREF(quotes);
+                    return -1;
+                }
+                self->md.options.quotes[i] = dst;
+                Py_DECREF(one);
+            }
+        } else {
+            Py_DECREF(quotes);
+            PyErr_SetString(PyExc_TypeError,
+                "quotes must be a string or a sequence of 4 strings");
+            return -1;
+        }
+        Py_DECREF(quotes);
+    } else if (quotes == NULL) {
+        if (PyErr_Occurred()) PyErr_Clear();
+    } else {
+        Py_DECREF(quotes);
     }
 
     /* Linkify needs a registered linkifier — install the default one
@@ -949,19 +1190,105 @@ static int apply_options_dict(PyMarkdownIt *self, PyObject *opts)
     return 0;
 }
 
+/* Re-sync the persistent ``options_dict`` into the C ``mdit_options``
+ * struct. Called before each parse/render so user mutations like
+ * ``md.options['typographer'] = True`` take effect. */
+static int sync_options_from_dict(PyMarkdownIt *self)
+{
+    if (self->options_dict == NULL) return 0;
+    return apply_options_dict(self, self->options_dict);
+}
+
 /* ------------------------------------------------------------------ */
 /* tp_init / tp_dealloc                                                */
 /* ------------------------------------------------------------------ */
 
 static int PyMarkdownIt_init(PyMarkdownIt *self, PyObject *args, PyObject *kwargs)
 {
-    static char *kwlist[] = { "preset", "options", NULL };
-    const char *preset    = "default";
-    PyObject   *opts_obj  = NULL;
+    /* Upstream signature: MarkdownIt(config="commonmark", options_update=None).
+     * We accept both ``config`` and ``preset`` as keyword aliases for
+     * the first argument, and both ``options`` and ``options_update``
+     * for the second, so test bodies copied verbatim from upstream
+     * keep working. */
+    const char *preset   = "commonmark";
+    PyObject   *opts_obj = NULL;
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|sO", kwlist,
-                                     &preset, &opts_obj)) {
+    Py_ssize_t nargs = (args == NULL) ? 0 : PyTuple_GET_SIZE(args);
+    if (nargs >= 1) {
+        PyObject *first = PyTuple_GET_ITEM(args, 0);
+        if (first != Py_None) {
+            if (!PyUnicode_Check(first)) {
+                PyErr_SetString(PyExc_TypeError,
+                    "first positional argument (preset) must be a str");
+                return -1;
+            }
+            preset = PyUnicode_AsUTF8(first);
+            if (preset == NULL) return -1;
+        }
+    }
+    if (nargs >= 2) {
+        opts_obj = PyTuple_GET_ITEM(args, 1);
+    }
+    if (nargs > 2) {
+        PyErr_Format(PyExc_TypeError,
+            "MarkdownIt() takes at most 2 positional arguments (%zd given)",
+            (Py_ssize_t)nargs);
         return -1;
+    }
+    if (kwargs != NULL && PyDict_Size(kwargs) > 0) {
+        const char *cfg_keys[] = { "config", "preset", NULL };
+        for (size_t i = 0; cfg_keys[i] != NULL; ++i) {
+            PyObject *v = PyDict_GetItemString(kwargs, cfg_keys[i]);
+            if (v != NULL && v != Py_None) {
+                if (nargs >= 1) {
+                    PyErr_Format(PyExc_TypeError,
+                        "MarkdownIt() got multiple values for argument %s",
+                        cfg_keys[i]);
+                    return -1;
+                }
+                if (!PyUnicode_Check(v)) {
+                    PyErr_Format(PyExc_TypeError,
+                        "%s must be a str", cfg_keys[i]);
+                    return -1;
+                }
+                preset = PyUnicode_AsUTF8(v);
+                if (preset == NULL) return -1;
+            }
+            if (v != NULL) {
+                PyDict_DelItemString(kwargs, cfg_keys[i]);
+            }
+        }
+        const char *opt_keys[] = { "options", "options_update", NULL };
+        for (size_t i = 0; opt_keys[i] != NULL; ++i) {
+            PyObject *v = PyDict_GetItemString(kwargs, opt_keys[i]);
+            if (v != NULL) {
+                if (nargs >= 2 || opts_obj != NULL) {
+                    PyErr_Format(PyExc_TypeError,
+                        "MarkdownIt() got multiple values for options");
+                    return -1;
+                }
+                opts_obj = v;
+                PyDict_DelItemString(kwargs, opt_keys[i]);
+            }
+        }
+        /* renderer_cls is silently ignored — the C engine has its own
+         * built-in renderer, with no Python-callable rules yet. */
+        PyDict_DelItemString(kwargs, "renderer_cls");
+        if (PyErr_Occurred()) PyErr_Clear();
+        if (PyDict_Size(kwargs) > 0) {
+            PyObject *first_key = NULL;
+            PyObject *_v = NULL;
+            Py_ssize_t pos = 0;
+            if (PyDict_Next(kwargs, &pos, &first_key, &_v) && first_key != NULL) {
+                PyErr_Format(PyExc_TypeError,
+                    "MarkdownIt() got an unexpected keyword argument '%U'",
+                    first_key);
+            } else {
+                PyErr_SetString(PyExc_TypeError,
+                    "MarkdownIt() got unexpected keyword arguments");
+            }
+            return -1;
+        }
     }
 
     if (!self->initialized) {
@@ -977,11 +1304,18 @@ static int PyMarkdownIt_init(PyMarkdownIt *self, PyObject *args, PyObject *kwarg
     if (apply_preset(self, preset) < 0) return -1;
     if (apply_options_dict(self, opts_obj) < 0) return -1;
 
+    /* Build a live ``options`` dict reflecting the post-preset +
+     * post-overrides state. Subsequent mutations of this dict feed
+     * back into the C engine via ``sync_options_from_dict`` on each
+     * parse/render call. */
+    if (build_options_dict(self) < 0) return -1;
+
     return 0;
 }
 
 static void PyMarkdownIt_dealloc(PyMarkdownIt *self)
 {
+    Py_CLEAR(self->options_dict);
     if (self->initialized) {
         mdit_md_destroy(&self->md);
         mdit_arena_destroy(&self->arena);
@@ -1004,6 +1338,8 @@ static PyObject *PyMarkdownIt_render(PyMarkdownIt *self, PyObject *arg)
     Py_ssize_t   n = 0;
     const char  *s = PyUnicode_AsUTF8AndSize(arg, &n);
     if (s == NULL) return NULL;
+
+    if (sync_options_from_dict(self) < 0) return NULL;
 
     /* Reset the arena between renders so memory doesn't grow without
      * bound across many calls on the same instance. mdit_md_init kept
@@ -1050,6 +1386,8 @@ static PyObject *PyMarkdownIt_parse(PyMarkdownIt *self, PyObject *args,
     Py_ssize_t n = 0;
     const char *s = PyUnicode_AsUTF8AndSize(src_obj, &n);
     if (s == NULL) return NULL;
+
+    if (sync_options_from_dict(self) < 0) return NULL;
 
     mdit_vec_token tokens;
     mdit_vec_token_init(&tokens, &self->arena);
@@ -1197,36 +1535,11 @@ static PyObject *PyMarkdownIt_disable(PyMarkdownIt *self, PyObject *args)
 static PyObject *PyMarkdownIt_options_get(PyMarkdownIt *self, void *closure)
 {
     (void)closure;
-    PyObject *d = PyDict_New();
-    if (d == NULL) return NULL;
-#define SET_BOOL(key, field) do {                              \
-        PyObject *v = (self->md.options.field) ? Py_True : Py_False; \
-        if (PyDict_SetItemString(d, key, v) < 0) goto err;     \
-    } while (0)
-#define SET_INT(key, field) do {                               \
-        PyObject *v = PyLong_FromLong(self->md.options.field); \
-        if (v == NULL) goto err;                               \
-        int rc = PyDict_SetItemString(d, key, v);              \
-        Py_DECREF(v);                                          \
-        if (rc < 0) goto err;                                  \
-    } while (0)
-
-    SET_INT ("maxNesting",                  max_nesting);
-    SET_BOOL("html",                        html);
-    SET_BOOL("xhtmlOut",                    xhtml_out);
-    SET_BOOL("breaks",                      breaks);
-    SET_BOOL("linkify",                     linkify);
-    SET_BOOL("typographer",                 typographer);
-    SET_BOOL("strikethrough_single_tilde",  strikethrough_single_tilde);
-    SET_BOOL("tasklists",                   tasklists);
-    SET_BOOL("tasklists_editable",          tasklists_editable);
-    SET_BOOL("alerts",                      alerts);
-    return d;
-err:
-    Py_DECREF(d);
-    return NULL;
-#undef SET_BOOL
-#undef SET_INT
+    if (self->options_dict == NULL) {
+        if (build_options_dict(self) < 0) return NULL;
+    }
+    Py_INCREF(self->options_dict);
+    return self->options_dict;
 }
 
 static int PyMarkdownIt_options_set(PyMarkdownIt *self, PyObject *value,
@@ -1237,14 +1550,49 @@ static int PyMarkdownIt_options_set(PyMarkdownIt *self, PyObject *value,
         PyErr_SetString(PyExc_TypeError, "options cannot be deleted");
         return -1;
     }
-    return apply_options_dict(self, value);
+    /* Fold user keys into the C state first, so build_options_dict
+     * picks them up when it rebuilds the canonical dict from
+     * mdit_options. Then preserve any extra keys the caller supplied
+     * (e.g. ``highlight``, ``store_labels``) by replaying `value` over
+     * the rebuilt dict. */
+    if (apply_options_dict(self, value) < 0) return -1;
+    if (build_options_dict(self) < 0) return -1;
+    if (PyMapping_Check(value)) {
+        if (PyDict_Check(value)) {
+            if (PyDict_Update(self->options_dict, value) < 0) return -1;
+        } else {
+            /* Generic mapping: copy each item explicitly via
+             * PyMapping_Items + dict-set. */
+            PyObject *items = PyMapping_Items(value);
+            if (items == NULL) return -1;
+            Py_ssize_t n = PySequence_Length(items);
+            for (Py_ssize_t i = 0; i < n; ++i) {
+                PyObject *pair = PySequence_GetItem(items, i);
+                if (pair == NULL) { Py_DECREF(items); return -1; }
+                PyObject *k = PySequence_GetItem(pair, 0);
+                PyObject *v = PySequence_GetItem(pair, 1);
+                Py_DECREF(pair);
+                if (k == NULL || v == NULL) {
+                    Py_XDECREF(k); Py_XDECREF(v);
+                    Py_DECREF(items);
+                    return -1;
+                }
+                int rc = PyDict_SetItem(self->options_dict, k, v);
+                Py_DECREF(k); Py_DECREF(v);
+                if (rc < 0) { Py_DECREF(items); return -1; }
+            }
+            Py_DECREF(items);
+        }
+    }
+    return 0;
 }
 
 static PyGetSetDef PyMarkdownIt_getsetters[] = {
     { "options",
       (getter)PyMarkdownIt_options_get,
       (setter)PyMarkdownIt_options_set,
-      "Parser options as a dict (subset of upstream MarkdownIt.options).",
+      "Parser options as a live dict (mutations propagate on next "
+      "parse/render). Mirrors upstream ``MarkdownIt.options``.",
       NULL },
     { NULL }
 };

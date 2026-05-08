@@ -139,6 +139,9 @@ const mdit_str *mdit_ruler_active_rule_names(mdit_ruler *r, size_t *out_n);
 /* True iff a rule with that name exists. */
 bool mdit_ruler_has(const mdit_ruler *r, mdit_str name);
 
+/* True iff a rule with that name exists *and* is currently enabled. */
+bool mdit_ruler_is_rule_enabled(const mdit_ruler *r, mdit_str name);
+
 #ifdef __cplusplus
 }
 #endif

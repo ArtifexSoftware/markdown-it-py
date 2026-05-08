@@ -374,3 +374,10 @@ bool mdit_ruler_has(const mdit_ruler *r, mdit_str name)
 {
     return find_rule(r, name) >= 0;
 }
+
+bool mdit_ruler_is_rule_enabled(const mdit_ruler *r, mdit_str name)
+{
+    int idx = find_rule(r, name);
+    if (idx < 0) return false;
+    return r->rules.data[idx].enabled;
+}
