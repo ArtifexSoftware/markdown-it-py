@@ -37,8 +37,8 @@ void mdit_md_set_linkifier(mdit_md *md, const mdit_linkifier *linkifier)
     md->linkifier = linkifier;
 }
 
-bool mdit_md_parse(mdit_md *md, mdit_str src, void *env,
-                   mdit_vec_token *out_tokens)
+static bool mdit_md_parse_impl(mdit_md *md, mdit_str src, void *env,
+                               mdit_vec_token *out_tokens, bool inline_mode)
 {
     mdit_env auto_env;
     if (env == NULL) {
@@ -47,11 +47,25 @@ bool mdit_md_parse(mdit_md *md, mdit_str src, void *env,
     }
     mdit_state_core state;
     mdit_state_core_init(&state, md->arena, src, md, env, out_tokens);
+    state.inlineMode = inline_mode;
     mdit_parser_core_process(&md->core, &state);
     return true;
 }
 
-bool mdit_md_render(mdit_md *md, mdit_str src, void *env, mdit_buf *out)
+bool mdit_md_parse(mdit_md *md, mdit_str src, void *env,
+                   mdit_vec_token *out_tokens)
+{
+    return mdit_md_parse_impl(md, src, env, out_tokens, false);
+}
+
+bool mdit_md_parse_inline(mdit_md *md, mdit_str src, void *env,
+                          mdit_vec_token *out_tokens)
+{
+    return mdit_md_parse_impl(md, src, env, out_tokens, true);
+}
+
+static bool mdit_md_render_impl(mdit_md *md, mdit_str src, void *env,
+                                mdit_buf *out, bool inline_mode)
 {
     mdit_env auto_env;
     if (env == NULL) {
@@ -60,7 +74,10 @@ bool mdit_md_render(mdit_md *md, mdit_str src, void *env, mdit_buf *out)
     }
     mdit_vec_token tokens;
     mdit_vec_token_init(&tokens, md->arena);
-    if (!mdit_md_parse(md, src, env, &tokens)) return false;
+    if (!mdit_md_parse_impl(md, src, env, &tokens, inline_mode)) {
+        mdit_vec_token_destroy(&tokens);
+        return false;
+    }
 
     mdit_renderer_options ropts;
     ropts.xhtmlOut          = md->options.xhtml_out;
@@ -72,4 +89,15 @@ bool mdit_md_render(mdit_md *md, mdit_str src, void *env, mdit_buf *out)
                                    &ropts, env, out);
     mdit_vec_token_destroy(&tokens);
     return ok;
+}
+
+bool mdit_md_render(mdit_md *md, mdit_str src, void *env, mdit_buf *out)
+{
+    return mdit_md_render_impl(md, src, env, out, false);
+}
+
+bool mdit_md_render_inline(mdit_md *md, mdit_str src, void *env,
+                           mdit_buf *out)
+{
+    return mdit_md_render_impl(md, src, env, out, true);
 }

@@ -1424,11 +1424,179 @@ static void PyMarkdownIt_dealloc(PyMarkdownIt *self)
 }
 
 /* ------------------------------------------------------------------ */
+/* env helpers                                                         */
+/* ------------------------------------------------------------------ */
+
+/* Cached ``collections.abc.MutableMapping`` for env type checks. The
+ * extension keeps a strong reference for the process lifetime; this
+ * matches upstream's runtime ``isinstance(env, MutableMapping)`` check
+ * and accepts any user mapping (dict, ChainMap, custom class, …). */
+static PyObject *get_mutable_mapping(void)
+{
+    static PyObject *cached = NULL;
+    if (cached != NULL) return cached;
+    PyObject *mod = PyImport_ImportModule("collections.abc");
+    if (mod == NULL) return NULL;
+    PyObject *cls = PyObject_GetAttrString(mod, "MutableMapping");
+    Py_DECREF(mod);
+    if (cls == NULL) return NULL;
+    cached = cls; /* leaked deliberately for process lifetime */
+    return cached;
+}
+
+/* Validate that ``env_obj`` is either ``None`` or a MutableMapping.
+ * Returns 0 on success, -1 with an exception set otherwise. */
+static int validate_env(PyObject *env_obj)
+{
+    if (env_obj == NULL || env_obj == Py_None) return 0;
+    if (PyDict_Check(env_obj)) return 0;
+    PyObject *cls = get_mutable_mapping();
+    if (cls == NULL) return -1;
+    int rc = PyObject_IsInstance(env_obj, cls);
+    if (rc < 0) return -1;
+    if (rc == 0) {
+        PyErr_Format(PyExc_TypeError,
+            "Input data should be a MutableMapping, not %.200s",
+            Py_TYPE(env_obj)->tp_name);
+        return -1;
+    }
+    return 0;
+}
+
+/* Build a Python str from an ``mdit_str``. */
+static PyObject *py_str_from_mdit(mdit_str s)
+{
+    return PyUnicode_FromStringAndSize(s.data, (Py_ssize_t)s.len);
+}
+
+/* Build ``[map_begin, map_end]`` list for a reference's source map. */
+static PyObject *py_map_pair(int32_t begin, int32_t end)
+{
+    PyObject *list = PyList_New(2);
+    if (list == NULL) return NULL;
+    PyObject *b = PyLong_FromLong(begin);
+    PyObject *e = PyLong_FromLong(end);
+    if (b == NULL || e == NULL) {
+        Py_XDECREF(b); Py_XDECREF(e); Py_DECREF(list);
+        return NULL;
+    }
+    PyList_SET_ITEM(list, 0, b);
+    PyList_SET_ITEM(list, 1, e);
+    return list;
+}
+
+/* Build {"title": ..., "href": ..., "map": [...]} for a reference. */
+static PyObject *py_reference_dict(const mdit_reference *ref,
+                                   bool include_label)
+{
+    PyObject *d = PyDict_New();
+    if (d == NULL) return NULL;
+    PyObject *title = py_str_from_mdit(ref->title);
+    PyObject *href  = py_str_from_mdit(ref->href);
+    PyObject *map   = py_map_pair(ref->map_begin, ref->map_end);
+    if (title == NULL || href == NULL || map == NULL) goto fail;
+    if (PyDict_SetItemString(d, "title", title) < 0) goto fail;
+    if (PyDict_SetItemString(d, "href",  href)  < 0) goto fail;
+    if (PyDict_SetItemString(d, "map",   map)   < 0) goto fail;
+    if (include_label) {
+        PyObject *label = py_str_from_mdit(ref->label);
+        if (label == NULL) goto fail;
+        int rc = PyDict_SetItemString(d, "label", label);
+        Py_DECREF(label);
+        if (rc < 0) goto fail;
+    }
+    Py_DECREF(title); Py_DECREF(href); Py_DECREF(map);
+    return d;
+fail:
+    Py_XDECREF(title); Py_XDECREF(href); Py_XDECREF(map); Py_DECREF(d);
+    return NULL;
+}
+
+/* Mirror upstream's reference-rule env writes: populate
+ * env["references"][label] = {...} for every C reference (deduped),
+ * and append duplicates to env.setdefault("duplicate_refs", []).
+ *
+ * Pre-existing entries in env["references"] take precedence — this
+ * matches the ``if label not in state.env["references"]`` check in
+ * ``rules_block/reference.py``. Returns 0 on success, -1 on error. */
+static int populate_env_from_mdit(PyObject *env_obj, const mdit_env *c_env)
+{
+    if (env_obj == NULL || env_obj == Py_None) return 0;
+    if (c_env == NULL) return 0;
+    if (c_env->references_len == 0 && c_env->duplicate_refs_len == 0) {
+        return 0;
+    }
+
+    /* Ensure env["references"] exists and is a mapping we can write
+     * to. ``PyMapping_HasKeyString`` swallows AttributeError for the
+     * ``__contains__`` probe, so we rely on it to avoid raising on
+     * vanilla dicts that don't have the key yet. */
+    PyObject *refs = NULL;
+    int has_refs = PyMapping_HasKeyString(env_obj, "references");
+    if (has_refs < 0) return -1;
+    if (has_refs) {
+        refs = PyMapping_GetItemString(env_obj, "references");
+        if (refs == NULL) return -1;
+    } else {
+        refs = PyDict_New();
+        if (refs == NULL) return -1;
+        if (PyMapping_SetItemString(env_obj, "references", refs) < 0) {
+            Py_DECREF(refs);
+            return -1;
+        }
+    }
+
+    for (size_t i = 0; i < c_env->references_len; ++i) {
+        const mdit_reference *ref = &c_env->references[i];
+        PyObject *key = py_str_from_mdit(ref->label);
+        if (key == NULL) { Py_DECREF(refs); return -1; }
+        int has = PyMapping_HasKey(refs, key);
+        if (has < 0) { Py_DECREF(key); Py_DECREF(refs); return -1; }
+        if (has) {
+            Py_DECREF(key);
+            continue;
+        }
+        PyObject *val = py_reference_dict(ref, false);
+        if (val == NULL) { Py_DECREF(key); Py_DECREF(refs); return -1; }
+        int rc = PyObject_SetItem(refs, key, val);
+        Py_DECREF(key); Py_DECREF(val);
+        if (rc < 0) { Py_DECREF(refs); return -1; }
+    }
+    Py_DECREF(refs);
+
+    if (c_env->duplicate_refs_len > 0) {
+        PyObject *dups = NULL;
+        int has_dups = PyMapping_HasKeyString(env_obj, "duplicate_refs");
+        if (has_dups < 0) return -1;
+        if (has_dups) {
+            dups = PyMapping_GetItemString(env_obj, "duplicate_refs");
+            if (dups == NULL) return -1;
+        } else {
+            dups = PyList_New(0);
+            if (dups == NULL) return -1;
+            if (PyMapping_SetItemString(env_obj, "duplicate_refs", dups) < 0) {
+                Py_DECREF(dups);
+                return -1;
+            }
+        }
+        for (size_t i = 0; i < c_env->duplicate_refs_len; ++i) {
+            PyObject *entry = py_reference_dict(&c_env->duplicate_refs[i], true);
+            if (entry == NULL) { Py_DECREF(dups); return -1; }
+            int rc = PyList_Append(dups, entry);
+            Py_DECREF(entry);
+            if (rc < 0) { Py_DECREF(dups); return -1; }
+        }
+        Py_DECREF(dups);
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* render()                                                            */
 /* ------------------------------------------------------------------ */
 
-static PyObject *PyMarkdownIt_render(PyMarkdownIt *self, PyObject *args,
-                                     PyObject *kwargs)
+static PyObject *do_render(PyMarkdownIt *self, PyObject *args,
+                           PyObject *kwargs, bool inline_mode)
 {
     static char *kwlist[] = { "src", "env", NULL };
     PyObject *src_obj = NULL;
@@ -1437,11 +1605,11 @@ static PyObject *PyMarkdownIt_render(PyMarkdownIt *self, PyObject *args,
                                      &src_obj, &env_obj)) {
         return NULL;
     }
-
     if (!self->initialized) {
         PyErr_SetString(PyExc_RuntimeError, "MarkdownIt not initialized");
         return NULL;
     }
+    if (validate_env(env_obj) < 0) return NULL;
 
     Py_ssize_t   n = 0;
     const char  *s = PyUnicode_AsUTF8AndSize(src_obj, &n);
@@ -1449,12 +1617,10 @@ static PyObject *PyMarkdownIt_render(PyMarkdownIt *self, PyObject *args,
 
     if (sync_options_from_dict(self) < 0) return NULL;
 
-    /* Reset the arena between renders so memory doesn't grow without
-     * bound across many calls on the same instance. mdit_md_init kept
-     * pointers into the arena (renderer slots, ruler entries), so we
-     * must NOT reset — instead we accept that long-lived instances
-     * grow proportionally to total parse activity. A future slice
-     * will introduce a per-render scratch arena. */
+    /* The C parser still needs its own ``mdit_env`` for reference
+     * tracking. After parsing we mirror its references back into the
+     * user-supplied Python ``env`` so callers can read them out, the
+     * same way upstream populates ``env["references"]``. */
     mdit_buf out;
     mdit_buf_init(&out);
     mdit_str src = { s, (size_t)n };
@@ -1462,7 +1628,10 @@ static PyObject *PyMarkdownIt_render(PyMarkdownIt *self, PyObject *args,
     mdit_env_init(&c_env, self->md.arena);
     mdit_vec_token tokens;
     mdit_vec_token_init(&tokens, self->md.arena);
-    if (!mdit_md_parse(&self->md, src, &c_env, &tokens)) {
+    bool parsed = inline_mode
+        ? mdit_md_parse_inline(&self->md, src, &c_env, &tokens)
+        : mdit_md_parse(&self->md, src, &c_env, &tokens);
+    if (!parsed) {
         mdit_vec_token_destroy(&tokens);
         mdit_buf_destroy(&out);
         if (!PyErr_Occurred()) {
@@ -1486,18 +1655,34 @@ static PyObject *PyMarkdownIt_render(PyMarkdownIt *self, PyObject *args,
         }
         return NULL;
     }
+    if (populate_env_from_mdit(env_obj, &c_env) < 0) {
+        mdit_buf_destroy(&out);
+        return NULL;
+    }
     PyObject *result = PyUnicode_DecodeUTF8(
         (out.data ? out.data : ""), (Py_ssize_t)out.len, "strict");
     mdit_buf_destroy(&out);
     return result;
 }
 
+static PyObject *PyMarkdownIt_render(PyMarkdownIt *self, PyObject *args,
+                                     PyObject *kwargs)
+{
+    return do_render(self, args, kwargs, false);
+}
+
+static PyObject *PyMarkdownIt_renderInline(PyMarkdownIt *self, PyObject *args,
+                                           PyObject *kwargs)
+{
+    return do_render(self, args, kwargs, true);
+}
+
 /* ------------------------------------------------------------------ */
 /* parse()                                                             */
 /* ------------------------------------------------------------------ */
 
-static PyObject *PyMarkdownIt_parse(PyMarkdownIt *self, PyObject *args,
-                                    PyObject *kwargs)
+static PyObject *do_parse(PyMarkdownIt *self, PyObject *args,
+                          PyObject *kwargs, bool inline_mode)
 {
     static char *kwlist[] = { "src", "env", NULL };
     PyObject *src_obj = NULL;
@@ -1506,12 +1691,11 @@ static PyObject *PyMarkdownIt_parse(PyMarkdownIt *self, PyObject *args,
                                      &src_obj, &env_obj)) {
         return NULL;
     }
-    (void)env_obj; /* env support lands with the fuller plugin surface. */
-
     if (!self->initialized) {
         PyErr_SetString(PyExc_RuntimeError, "MarkdownIt not initialized");
         return NULL;
     }
+    if (validate_env(env_obj) < 0) return NULL;
 
     Py_ssize_t n = 0;
     const char *s = PyUnicode_AsUTF8AndSize(src_obj, &n);
@@ -1519,10 +1703,15 @@ static PyObject *PyMarkdownIt_parse(PyMarkdownIt *self, PyObject *args,
 
     if (sync_options_from_dict(self) < 0) return NULL;
 
+    mdit_env c_env;
+    mdit_env_init(&c_env, self->md.arena);
     mdit_vec_token tokens;
     mdit_vec_token_init(&tokens, &self->arena);
     mdit_str src = { s, (size_t)n };
-    if (!mdit_md_parse(&self->md, src, NULL, &tokens)) {
+    bool parsed = inline_mode
+        ? mdit_md_parse_inline(&self->md, src, &c_env, &tokens)
+        : mdit_md_parse(&self->md, src, &c_env, &tokens);
+    if (!parsed) {
         mdit_vec_token_destroy(&tokens);
         PyErr_SetString(PyExc_RuntimeError, "mdit_md_parse failed");
         return NULL;
@@ -1544,7 +1733,24 @@ static PyObject *PyMarkdownIt_parse(PyMarkdownIt *self, PyObject *args,
     }
 
     mdit_vec_token_destroy(&tokens);
+
+    if (populate_env_from_mdit(env_obj, &c_env) < 0) {
+        Py_DECREF(list);
+        return NULL;
+    }
     return list;
+}
+
+static PyObject *PyMarkdownIt_parse(PyMarkdownIt *self, PyObject *args,
+                                    PyObject *kwargs)
+{
+    return do_parse(self, args, kwargs, false);
+}
+
+static PyObject *PyMarkdownIt_parseInline(PyMarkdownIt *self, PyObject *args,
+                                          PyObject *kwargs)
+{
+    return do_parse(self, args, kwargs, true);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1908,9 +2114,19 @@ static PyMethodDef PyMarkdownIt_methods[] = {
     { "parse",   (PyCFunction)PyMarkdownIt_parse,
       METH_VARARGS | METH_KEYWORDS,
       "parse(src, env=None) -> list[Token]: parse Markdown to tokens." },
+    { "parseInline", (PyCFunction)PyMarkdownIt_parseInline,
+      METH_VARARGS | METH_KEYWORDS,
+      "parseInline(src, env=None) -> list[Token]: parse one inline "
+      "fragment (a single ``inline`` token with children)." },
     { "render",  (PyCFunction)PyMarkdownIt_render,
       METH_VARARGS | METH_KEYWORDS,
-      "render(src) -> str: parse + render Markdown to HTML." },
+      "render(src, env=None) -> str: parse + render Markdown to HTML. "
+      "If ``env`` is a MutableMapping, link references and duplicates "
+      "discovered while parsing are written back into it." },
+    { "renderInline", (PyCFunction)PyMarkdownIt_renderInline,
+      METH_VARARGS | METH_KEYWORDS,
+      "renderInline(src, env=None) -> str: render inline-only content "
+      "(no surrounding ``<p>``)." },
     { "enable",  (PyCFunction)PyMarkdownIt_enable,  METH_VARARGS,
       "enable(names, ignoreInvalid=False) -> self: enable rule(s)." },
     { "disable", (PyCFunction)PyMarkdownIt_disable, METH_VARARGS,

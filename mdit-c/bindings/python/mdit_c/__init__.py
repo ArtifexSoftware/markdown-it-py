@@ -4,14 +4,20 @@ The compiled ``._mdit_c`` module owns the parser and renderer. This
 package layers an upstream-shaped Python facade on top so most
 ``markdown_it.MarkdownIt`` user code keeps working without changes.
 
-Supported today (Phase 5, slice 4):
+Supported today (Phase 5, slice 5):
 
 * ``MarkdownIt(config="commonmark", options=None)`` with preset
   aliases ``default``/``js-default``, ``commonmark``, ``zero``,
   ``gfm-like``, ``gfm-like2``; ``preset=`` and ``options_update=``
   keyword aliases for compatibility with upstream tests.
-* ``MarkdownIt.render(src, env=None)`` and
-  ``MarkdownIt.parse(src, env=None) -> list[Token]``.
+* ``MarkdownIt.render(src, env=None)``,
+  ``MarkdownIt.parse(src, env=None) -> list[Token]``,
+  ``MarkdownIt.renderInline(src, env=None)``, and
+  ``MarkdownIt.parseInline(src, env=None) -> list[Token]`` — when
+  ``env`` is a ``MutableMapping``, link references and duplicates
+  discovered during parsing are written back as
+  ``env["references"]`` and ``env["duplicate_refs"]`` in the same
+  shape upstream produces.
 * ``MarkdownIt.options`` as a live dict that mirrors the C
   ``mdit_options`` struct on every parse/render call.
 * ``MarkdownIt.enable(...)`` and ``MarkdownIt.disable(...)`` over
@@ -34,8 +40,7 @@ Supported today (Phase 5, slice 4):
   ``from_dict``, ``copy``, equality, and ``attr*`` helpers.
 
 Not exposed yet (queued follow-ups): parser rule callbacks executing
-Python state functions through ``ruler.before/after/at/push``,
-``parseInline`` / ``renderInline``, env-populating ``parse``, and
+Python state functions through ``ruler.before/after/at/push`` and
 ``SyntaxTreeNode``.
 """
 

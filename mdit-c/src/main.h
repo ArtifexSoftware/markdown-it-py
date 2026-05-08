@@ -137,8 +137,21 @@ void mdit_md_set_linkifier(mdit_md *md, const mdit_linkifier *linkifier);
 bool mdit_md_parse(mdit_md *md, mdit_str src, void *env,
                    mdit_vec_token *out_tokens);
 
+/* Inline-only variant of ``mdit_md_parse``: skips block parsing and
+ * emits a single synthetic ``inline`` token wrapping the parsed inline
+ * children. Mirrors upstream's ``MarkdownIt.parseInline``. */
+bool mdit_md_parse_inline(mdit_md *md, mdit_str src, void *env,
+                          mdit_vec_token *out_tokens);
+
 /* Parse + render in one shot. ``out`` is appended to. */
 bool mdit_md_render(mdit_md *md, mdit_str src, void *env, mdit_buf *out);
+
+/* Inline-only variant of ``mdit_md_render``: invokes
+ * ``mdit_md_parse_inline`` and renders the resulting token stream.
+ * The single ``inline`` token renders unwrapped (no ``<p>`` block),
+ * matching upstream's ``MarkdownIt.renderInline``. */
+bool mdit_md_render_inline(mdit_md *md, mdit_str src, void *env,
+                           mdit_buf *out);
 
 #ifdef __cplusplus
 }

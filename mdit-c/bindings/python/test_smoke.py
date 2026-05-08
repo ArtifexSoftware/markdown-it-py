@@ -233,6 +233,55 @@ def main(argv: list[str]) -> int:
               f"{rendered_custom!r}", file=sys.stderr)
         return 3
 
+    # parseInline / renderInline. Inline-mode parsing produces a single
+    # ``inline`` token whose ``children`` are the parsed inline tokens;
+    # renderInline emits the inline content unwrapped by ``<p>``.
+    md_inline = mdit_c.MarkdownIt("zero").enable(
+        ["text", "newline", "emphasis", "balance_pairs", "fragments_join"])
+    inline_tokens = md_inline.parseInline("abc\n\n*xyz*")
+    if (len(inline_tokens) != 1 or inline_tokens[0].type != "inline"
+            or inline_tokens[0].children is None):
+        print(f"smoke[parseInline] unexpected token shape: {inline_tokens!r}",
+              file=sys.stderr)
+        return 3
+    rendered_inline = md_inline.renderInline("abc\n\n*xyz*")
+    if "<p>" in rendered_inline or "</p>" in rendered_inline:
+        print(f"smoke[renderInline] should not produce <p>: "
+              f"{rendered_inline!r}", file=sys.stderr)
+        return 3
+
+    # env-populating parse: link references are written back into
+    # env["references"] in upstream's shape.
+    md_refs = mdit_c.MarkdownIt()
+    env: dict = {}
+    md_refs.parse("[foo]: /url 'title'\n\n[foo]", env)
+    if "references" not in env or "FOO" not in env["references"]:
+        print(f"smoke[env] references missing: {env!r}", file=sys.stderr)
+        return 3
+    foo = env["references"]["FOO"]
+    if foo["href"] != "/url" or foo["title"] != "title" or foo["map"] != [0, 1]:
+        print(f"smoke[env] reference shape mismatch: {foo!r}", file=sys.stderr)
+        return 3
+
+    # Duplicate references go into env["duplicate_refs"].
+    env_dup: dict = {}
+    md_refs.parse("[foo]: /a\n[foo]: /b\n\n[foo]", env_dup)
+    if (env_dup.get("references", {}).get("FOO", {}).get("href") != "/a"
+            or len(env_dup.get("duplicate_refs", [])) != 1):
+        print(f"smoke[env] duplicate refs mismatch: {env_dup!r}",
+              file=sys.stderr)
+        return 3
+
+    # Validate non-mapping env raises TypeError, like upstream.
+    try:
+        md_refs.parse("hi", "not a mapping")
+    except TypeError:
+        pass
+    else:
+        print("smoke[env] non-mapping env should raise TypeError",
+              file=sys.stderr)
+        return 3
+
     # Optional: cross-check byte-parity against upstream Python.
     try:
         from markdown_it import MarkdownIt as PyMarkdownIt
