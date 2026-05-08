@@ -147,11 +147,14 @@ jobs:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
         run: |
-          cmake -S mdit-c -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DMDIT_WERROR=ON
+          cmake -S mdit-c -B build \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DMDIT_BUILD_PYBIND=ON \
+            -DMDIT_WERROR=ON
       - name: Configure CMake (Windows / MSVC)
         if: runner.os == 'Windows'
         run: |
-          cmake -S mdit-c -B build -G "Visual Studio 17 2022" -A x64 -DMDIT_WERROR=ON
+          cmake -S mdit-c -B build -G "Visual Studio 17 2022" -A x64 -DMDIT_BUILD_PYBIND=ON -DMDIT_WERROR=ON
       - name: Build
         run: cmake --build build --config RelWithDebInfo --parallel
       - name: Download token oracle
@@ -184,6 +187,7 @@ jobs:
         run: |
           cmake -S mdit-c -B build-san \
             -DCMAKE_BUILD_TYPE=Debug \
+            -DMDIT_BUILD_PYBIND=ON \
             -DMDIT_ENABLE_ASAN=ON \
             -DMDIT_ENABLE_UBSAN=ON \
             -DMDIT_WERROR=ON

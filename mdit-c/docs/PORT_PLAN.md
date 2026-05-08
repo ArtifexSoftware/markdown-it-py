@@ -338,8 +338,27 @@ cases produce identical HTML to Python.
       and `md_cli_python_parity` (a Python-driven byte-equality sweep
       against the upstream CLI; auto-skips if `markdown_it` isn't
       importable in the test interpreter).
-- [ ] CPython extension exposing the same `MarkdownIt` Python class so
-      the existing `pytest` suite runs unmodified against the C engine.
+- [~] **CPython extension** (`mdit-c/bindings/python/`) — slice 1
+      shipped. `MDIT_BUILD_PYBIND=ON` builds an internal `_mdit_c`
+      module via CMake's `Python3_add_library(... WITH_SOABI ...)` and
+      stages it next to a small pure-Python `mdit_c` package wrapper.
+      The exposed surface today is `MarkdownIt(preset='default',
+      options=None)`, `.render(src) -> str`, the read/write
+      `.options` dict, and `.enable` / `.disable` against any of the
+      four rulers (core / block / inline / inline ruler2). Presets
+      mirror the upstream Python ones (`default`, `commonmark`,
+      `zero`); options accept the same camelCase keys upstream uses
+      (`maxNesting`, `xhtmlOut`, `langPrefix`, …). A dedicated
+      `python_smoke` CTest covers 7 hand-curated `commonmark` cases,
+      2 `default`-preset cases, GFM tasklists + alerts behaviour, and
+      a 14-input byte-parity sweep against
+      `markdown_it.MarkdownIt('commonmark').render(...)` (skipped
+      cleanly when `markdown_it` isn't importable). The
+      `_DEBUG` swap around `<Python.h>` lets the extension build under
+      MSVC's Debug config without `python3XX_d.lib`. CI gained the
+      `MDIT_BUILD_PYBIND=ON` flag in the matrix + sanitizer jobs.
+      Token-stream access (`parse`, `Token`) and the full
+      `markdown-it-py` test-suite hookup are deferred to slice 2.
 - [x] **CMake install rules + package config + pkg-config**. Toggled by
       `MDIT_INSTALL` (default ON). Installs `mdit_static` (renamed
       `libmdit.{a,lib}`) under `CMAKE_INSTALL_LIBDIR`, the curated
