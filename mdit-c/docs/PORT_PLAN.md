@@ -338,7 +338,7 @@ cases produce identical HTML to Python.
       and `md_cli_python_parity` (a Python-driven byte-equality sweep
       against the upstream CLI; auto-skips if `markdown_it` isn't
       importable in the test interpreter).
-- [~] **CPython extension** (`mdit-c/bindings/python/`) — slices 1–5
+- [~] **CPython extension** (`mdit-c/bindings/python/`) — slices 1–6
       shipped. `MDIT_BUILD_PYBIND=ON` builds an internal `_mdit_c`
       module via CMake's `Python3_add_library(... WITH_SOABI ...)` and
       stages it next to a small pure-Python `mdit_c` package wrapper.
@@ -423,10 +423,24 @@ cases produce identical HTML to Python.
       `upstream_tests/test_inline_and_env.py` covers token shape
       from `parseInline`, `renderInline` skipping `<p>` wrap,
       `env["references"]` / `env["duplicate_refs"]` parity vs
-      `markdown_it`, and TypeError on non-mapping env. Parser rule
+      `markdown_it`, and TypeError on non-mapping env.
+      Slice 6 ports `markdown_it.tree.SyntaxTreeNode` to
+      `mdit_c.tree.SyntaxTreeNode` (also re-exported as
+      `mdit_c.SyntaxTreeNode`). The class consumes the existing
+      `_mdit_c.Token` public surface, so the port is a near-verbatim
+      copy of the upstream module: ``children`` / ``parent`` /
+      ``walk`` / ``to_tokens`` / ``pretty`` / ``next_sibling`` /
+      ``previous_sibling`` / property pass-through (``tag``,
+      ``attrs``, ``map``, ``level``, ``content``, ``markup``,
+      ``info``, ``meta``, ``block``, ``hidden``).
+      `upstream_tests/test_tree.py` mirrors the upstream
+      `tests/test_tree.py` cases (token round-trip, type, sibling
+      traversal, walk order, `pretty(show_text=True)` byte-equal to
+      the upstream `.xml` regression files, plus a top-level
+      `mdit_c.SyntaxTreeNode` re-export check). Parser rule
       callbacks (`ruler.before/after/at/push` executing Python
       functions over real `StateBlock`/`StateInline`/`StateCore`
-      shims) and `SyntaxTreeNode` remain follow-up slices.
+      shims) remain the last queued follow-up slice.
 - [x] **CMake install rules + package config + pkg-config**. Toggled by
       `MDIT_INSTALL` (default ON). Installs `mdit_static` (renamed
       `libmdit.{a,lib}`) under `CMAKE_INSTALL_LIBDIR`, the curated

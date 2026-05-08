@@ -282,6 +282,26 @@ def main(argv: list[str]) -> int:
               file=sys.stderr)
         return 3
 
+    # SyntaxTreeNode round-trips a token stream (port of
+    # markdown_it.tree.SyntaxTreeNode). Walk yields depth-first.
+    from mdit_c.tree import SyntaxTreeNode
+    tree_tokens = mdit_c.MarkdownIt().parse(
+        "\n## Heading here\n\nSome text and **bold**.\n"
+    )
+    tree = SyntaxTreeNode(tree_tokens)
+    if tree.type != "root" or tree.children[0].type != "heading":
+        print(f"smoke[tree] unexpected root/heading: {tree.children!r}",
+              file=sys.stderr)
+        return 3
+    if tree_tokens != tree.to_tokens():
+        print("smoke[tree] to_tokens round-trip mismatch", file=sys.stderr)
+        return 3
+    walked = [n.type for n in tree.walk()]
+    if walked[:3] != ["root", "heading", "inline"]:
+        print(f"smoke[tree] walk order unexpected: {walked!r}",
+              file=sys.stderr)
+        return 3
+
     # Optional: cross-check byte-parity against upstream Python.
     try:
         from markdown_it import MarkdownIt as PyMarkdownIt

@@ -4,7 +4,7 @@ The compiled ``._mdit_c`` module owns the parser and renderer. This
 package layers an upstream-shaped Python facade on top so most
 ``markdown_it.MarkdownIt`` user code keeps working without changes.
 
-Supported today (Phase 5, slice 5):
+Supported today (Phase 5, slice 6):
 
 * ``MarkdownIt(config="commonmark", options=None)`` with preset
   aliases ``default``/``js-default``, ``commonmark``, ``zero``,
@@ -38,10 +38,16 @@ Supported today (Phase 5, slice 5):
   point.
 * ``Token`` with the upstream field layout, constructor, ``as_dict``,
   ``from_dict``, ``copy``, equality, and ``attr*`` helpers.
+* ``SyntaxTreeNode`` (also exposed as ``mdit_c.tree.SyntaxTreeNode``)
+  — pure-Python tree wrapper around a parsed token stream. Mirrors
+  ``markdown_it.tree.SyntaxTreeNode`` 1:1, including ``children``,
+  ``parent``, ``walk``, ``to_tokens``, ``pretty``, ``next_sibling`` /
+  ``previous_sibling``, and the ``Token`` property pass-through
+  (``tag``, ``attrs``, ``map``, ``level``, ``content``, ``markup``,
+  ``info``, ``meta``, ``block``, ``hidden``).
 
 Not exposed yet (queued follow-ups): parser rule callbacks executing
-Python state functions through ``ruler.before/after/at/push`` and
-``SyntaxTreeNode``.
+Python state functions through ``ruler.before/after/at/push``.
 """
 
 from __future__ import annotations
@@ -51,6 +57,7 @@ from typing import Any, Callable, Iterable, Iterator
 
 from ._mdit_c import MarkdownIt as _MarkdownIt
 from ._mdit_c import Token, __version__
+from .tree import SyntaxTreeNode
 
 
 def _escape_html(value: object) -> str:
@@ -245,4 +252,11 @@ class MarkdownIt(_MarkdownIt):
         return self
 
 
-__all__ = ["MarkdownIt", "RendererHTML", "Ruler", "Token", "__version__"]
+__all__ = [
+    "MarkdownIt",
+    "RendererHTML",
+    "Ruler",
+    "SyntaxTreeNode",
+    "Token",
+    "__version__",
+]
