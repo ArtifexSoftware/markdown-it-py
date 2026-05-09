@@ -598,6 +598,64 @@ cases produce identical HTML to Python.
       `:shrug:` example. Includes a porting checklist and the
       current limitations.
 
+### Phase 7 — deferred / post-1.0 follow-ups
+
+The 0→6 plan is complete: every block + inline rule, the four
+core rules, full `RendererHTML` parity, the `SyntaxTreeNode`
+convenience layer, the CLI, the install / pkg-config / shared-lib
+story, the CPython binding (parser rule callbacks, env propagation,
+`add_terminator_char`, alt-chain options), the libFuzzer +
+sanitizer harnesses, the benchmark harness, and the Doxygen
+reference + plugin porting guide all ship today. The items below
+are the things consciously punted on the way to that milestone;
+they're tracked here so they don't get lost.
+
+- [ ] **MSan job in CI.** Currently deferred because MSan needs a
+      Clang-built libc++ to avoid false positives on the C++
+      `cstdlib` shim used in the test driver. Lower priority than
+      the ASan + UBSan + libFuzzer trio that's already wired in.
+      Likely shape: a separate Linux-only matrix entry that builds
+      libc++ from the LLVM monorepo (or pulls a prebuilt one) and
+      runs the existing CTest suite under `-fsanitize=memory`.
+- [ ] **`mdit_c` on PyPI.** The CPython extension under
+      `mdit-c/bindings/python/` is feature-complete and byte-parity
+      green against upstream over the 904-item `python_pytest`
+      sweep, but it's only consumable as a CMake-built artifact
+      today. To ship: add a `pyproject.toml` (with `scikit-build-core`
+      or `meson-python` as the build backend so CMake stays the
+      source of truth), `cibuildwheel` matrix in CI for
+      Linux/macOS/Windows × CPython 3.10–3.13 (+ free-threaded /
+      PyPy where it builds), an sdist that ships the C sources,
+      and a release workflow gated on tags. After this lands,
+      `benchmarks/bench_engines.py` should grow an in-process
+      `mdit_c` engine for an apples-to-apples comparison without
+      subprocess startup cost.
+- [ ] **oss-fuzz integration.** The in-tree `c-fuzzers` job is a
+      30-second smoke run against the seed corpus — its purpose
+      is to keep the harnesses building cleanly and catch
+      regressions on the seed corpus immediately. Real
+      coverage-guided fuzzing belongs out of band on oss-fuzz:
+      add a `projects/markdown-it-py/` dir to
+      `google/oss-fuzz` containing a `Dockerfile`, `build.sh`
+      that builds the three harnesses with the supplied
+      `$LIB_FUZZING_ENGINE`, and a `project.yaml` listing
+      maintainers. Crashes that flow back from oss-fuzz get
+      committed to `mdit-c/fuzz/corpus/<harness>/` so they stay
+      regression-tested forever.
+- [ ] **Tighten shared-library symbol visibility.** Phase 5
+      `MDIT_BUILD_SHARED` ships with `WINDOWS_EXPORT_ALL_SYMBOLS`
+      on MSVC and default visibility on POSIX — i.e. every
+      non-`static` symbol is exported. The `MDIT_SHARED` /
+      `MDIT_BUILDING` define seam is already in place; the
+      remaining work is to (a) stamp `__attribute__((visibility
+      ("default")))` / `__declspec(dllexport)` via a
+      `MDIT_API` macro on the curated public surface, (b) flip
+      POSIX builds to `-fvisibility=hidden` by default, (c) drop
+      `WINDOWS_EXPORT_ALL_SYMBOLS` so MSVC stops auto-exporting
+      internals, and (d) add an ABI-surface test that diffs the
+      exported symbol set against a checked-in allowlist (so
+      accidental `extern` leaks become a CI failure).
+
 ## 3. Risk register
 
 | Risk                                                    | Mitigation                                                              |
@@ -620,5 +678,6 @@ cases produce identical HTML to Python.
 | 4     | 1–2 weeks    |
 | 5     | 1–2 weeks    |
 | 6     | ~2 weeks (then ongoing) |
+| 7     | ~1 week of release engineering + ongoing fuzz/ABI maintenance |
 
 Total to a 1.0-equivalent: **~3–4 months**.
