@@ -514,8 +514,43 @@ cases produce identical HTML to Python.
 
 ### Phase 6 — hardening
 
-- libFuzzer / AFL++ harnesses mirroring `tests/fuzz/`.
-- ASan / UBSan / MSan jobs in CI.
+- libFuzzer / AFL++ harnesses mirroring `tests/fuzz/` — DONE.
+    - `mdit-c/fuzz/` ships three harnesses:
+      `fuzz_parse_render` (full pipeline, mirrors upstream
+      `fuzz_markdown.py`), `fuzz_inline` (`renderInline` slice), and
+      `fuzz_token_roundtrip` (parse + `mdit_tokens_to_json`, the
+      contract used by the token oracle).
+    - Each harness defines `LLVMFuzzerTestOneInput` and links one of
+      two drivers depending on toolchain availability:
+      coverage-guided fuzzing under
+      `-DMDIT_FUZZ_LIBFUZZER=ON` (Clang only; pulls in
+      `-fsanitize=fuzzer,address,undefined`), or a portable
+      replay driver (`fuzz_main.c`) that walks a corpus directory
+      and replays each file through `LLVMFuzzerTestOneInput`. The
+      latter mode works on every supported compiler.
+    - `corpus/<harness>/` holds shrunk inputs covering the upstream
+      regression shapes (headings, lists, tables, references, raw
+      HTML, fenced code, escapes, emoji). Failing inputs from
+      oss-fuzz get committed here so they stay green forever.
+    - `MDIT_BUILD_FUZZ=ON` opt-in; the in-tree CTest sweep gains
+      three `fuzz_smoke_*` entries that replay the corpus and exit
+      well under a second per harness.
+- ASan / UBSan / MSan jobs in CI — DONE.
+    - `.github/workflows/mdit-c.yml`: the existing `sanitizers`
+      job (Linux + Clang, `-DMDIT_ENABLE_ASAN=ON
+      -DMDIT_ENABLE_UBSAN=ON`) now also enables `MDIT_BUILD_FUZZ=ON`
+      so the fuzz smoke entries run under sanitizers.
+    - New `c-fuzzers` job: builds with
+      `-DMDIT_FUZZ_LIBFUZZER=ON` (clang + libFuzzer) and runs each
+      harness for 30 seconds against the seeded corpus, uploading
+      crash artifacts on failure. Real fuzzing remains on oss-fuzz;
+      this CI job exists to keep the harnesses building cleanly and
+      to catch regressions on the seed corpus immediately.
+    - `cmake-configure` matrix gained `-DMDIT_BUILD_FUZZ=ON` so the
+      smoke entries run on every supported platform/compiler.
+    - MSan deferred: requires a Clang-built libc++ to avoid false
+      positives on the C++ `cstdlib` shim used in tests; lower
+      priority than the ASan + UBSan + libFuzzer trio that's now in.
 - Benchmarks vs Python and vs `cmark`.
 - Doxygen API docs and a porting guide for plugin authors.
 

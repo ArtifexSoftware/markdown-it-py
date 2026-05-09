@@ -150,11 +150,12 @@ jobs:
           cmake -S mdit-c -B build \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DMDIT_BUILD_PYBIND=ON \
+            -DMDIT_BUILD_FUZZ=ON \
             -DMDIT_WERROR=ON
       - name: Configure CMake (Windows / MSVC)
         if: runner.os == 'Windows'
         run: |
-          cmake -S mdit-c -B build -G "Visual Studio 17 2022" -A x64 -DMDIT_BUILD_PYBIND=ON -DMDIT_WERROR=ON
+          cmake -S mdit-c -B build -G "Visual Studio 17 2022" -A x64 -DMDIT_BUILD_PYBIND=ON -DMDIT_BUILD_FUZZ=ON -DMDIT_WERROR=ON
       - name: Build
         run: cmake --build build --config RelWithDebInfo --parallel
       - name: Download token oracle
@@ -188,6 +189,7 @@ jobs:
           cmake -S mdit-c -B build-san \
             -DCMAKE_BUILD_TYPE=Debug \
             -DMDIT_BUILD_PYBIND=ON \
+            -DMDIT_BUILD_FUZZ=ON \
             -DMDIT_ENABLE_ASAN=ON \
             -DMDIT_ENABLE_UBSAN=ON \
             -DMDIT_WERROR=ON
@@ -200,3 +202,62 @@ jobs:
           path: mdit-c/tests/oracle
       - name: Test under sanitizers
         run: ctest --test-dir build-san --output-on-failure
+
+  # ---------------------------------------------------------------------
+  # Coverage-guided fuzzing of the C engine.
+  #
+  # Builds the `mdit-c/fuzz/` harnesses with `-fsanitize=fuzzer,address,
+  # undefined` and runs each one against the seeded corpus for a short
+  # budget. Real fuzzing happens out of band on oss-fuzz; this job
+  # exists to (a) keep the harnesses building cleanly and (b) catch
+  # any regression on the seed corpus immediately. Crashes are
+  # uploaded as job artifacts for triage.
+  # ---------------------------------------------------------------------
+  c-fuzzers:
+    name: c-fuzzers (Linux / clang + libFuzzer)
+    needs: oracle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Configure with libFuzzer
+        env:
+          CC: clang
+        run: |
+          cmake -S mdit-c -B build-fuzz \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DMDIT_BUILD_FUZZ=ON \
+            -DMDIT_FUZZ_LIBFUZZER=ON
+      - name: Build fuzz harnesses
+        run: |
+          cmake --build build-fuzz --target \
+            fuzz_parse_render fuzz_inline fuzz_token_roundtrip --parallel
+      - name: Run fuzz_parse_render (30s)
+        run: |
+          mkdir -p artifacts
+          ./build-fuzz/fuzz/fuzz_parse_render \
+            -max_total_time=30 -timeout=10 -rss_limit_mb=2048 \
+            -artifact_prefix=artifacts/parse_render- \
+            mdit-c/fuzz/corpus/parse_render
+      - name: Run fuzz_inline (30s)
+        run: |
+          ./build-fuzz/fuzz/fuzz_inline \
+            -max_total_time=30 -timeout=10 -rss_limit_mb=2048 \
+            -artifact_prefix=artifacts/inline- \
+            mdit-c/fuzz/corpus/inline
+      - name: Run fuzz_token_roundtrip (30s)
+        run: |
+          ./build-fuzz/fuzz/fuzz_token_roundtrip \
+            -max_total_time=30 -timeout=10 -rss_limit_mb=2048 \
+            -artifact_prefix=artifacts/token_roundtrip- \
+            mdit-c/fuzz/corpus/token_roundtrip
+      - name: Upload crashes (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mdit-c-fuzz-artifacts
+          path: artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

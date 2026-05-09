@@ -35,6 +35,8 @@ option(MDIT_BUILD_CLI       "Build the md_cli command-line tool"            ON)
 option(MDIT_BUILD_TESTS     "Build the C test suite"                        ON)
 option(MDIT_BUILD_PYBIND    "Build the optional CPython extension"          OFF)
 option(MDIT_BUILD_SHARED    "Build mdit as a shared library (versioned)"    OFF)
+option(MDIT_BUILD_FUZZ      "Build the libFuzzer-style fuzz harnesses"      OFF)
+option(MDIT_FUZZ_LIBFUZZER  "Link fuzz harnesses with -fsanitize=fuzzer (Clang only)" OFF)
 option(MDIT_INSTALL         "Generate install rules + package config"       ON)
 option(MDIT_ENABLE_ASAN     "Build with AddressSanitizer (Debug builds)"    OFF)
 option(MDIT_ENABLE_UBSAN    "Build with UndefinedBehaviorSanitizer"         OFF)
@@ -160,6 +162,10 @@ endif()
 
 if(MDIT_BUILD_PYBIND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/bindings/python/CMakeLists.txt")
     add_subdirectory(bindings/python)
+endif()
+
+if(MDIT_BUILD_FUZZ AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fuzz/CMakeLists.txt")
+    add_subdirectory(fuzz)
 endif()
 
 # ---------------------------------------------------------------------------
