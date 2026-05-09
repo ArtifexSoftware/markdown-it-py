@@ -437,10 +437,26 @@ cases produce identical HTML to Python.
       `tests/test_tree.py` cases (token round-trip, type, sibling
       traversal, walk order, `pretty(show_text=True)` byte-equal to
       the upstream `.xml` regression files, plus a top-level
-      `mdit_c.SyntaxTreeNode` re-export check). Parser rule
-      callbacks (`ruler.before/after/at/push` executing Python
-      functions over real `StateBlock`/`StateInline`/`StateCore`
-      shims) remain the last queued follow-up slice.
+      `mdit_c.SyntaxTreeNode` re-export check).
+      Slice 7 wires Python parser rule callbacks through
+      `ruler.before/after/at/push` for the `core`, `block`, `inline`,
+      and `inline2` chains. `mdit_ruler` now distinguishes built-in
+      typed C rules from generic callback rules and dispatches plugin
+      entries with their `user` pointer. The CPython binding roots each
+      callback on the `MarkdownIt` instance, installs the right bridge
+      for the chain, and exposes short-lived state wrappers:
+      `StateCore(src, md, env, inlineMode)`,
+      `StateBlock(src, md, env, line/lineMax/blkIndent/level/tight/
+      parentType/...)`, and `StateInline(src, md, env, pos/posMax/
+      level/pending/pendingLevel/linkLevel)`, with `StateInline.pos`
+      writable so simple consuming rules can advance the cursor.
+      `upstream_tests/test_plugin_creation.py` mirrors the upstream
+      callback smoke cases (core/block/inline before/after/at through
+      `md.use`) and adds checks for inline2, state invalidation after a
+      rule returns, enable/disable on plugin rules, and registration
+      error paths. Follow-up scope remains richer state mutation
+      (`state.tokens`, token push helpers, env object identity inside
+      callbacks, alt-chain options, and `inline.add_terminator_char`).
 - [x] **CMake install rules + package config + pkg-config**. Toggled by
       `MDIT_INSTALL` (default ON). Installs `mdit_static` (renamed
       `libmdit.{a,lib}`) under `CMAKE_INSTALL_LIBDIR`, the curated

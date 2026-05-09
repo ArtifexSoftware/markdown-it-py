@@ -25,6 +25,7 @@
 typedef struct mdit_rule_record {
     mdit_str        name;
     bool            enabled;
+    bool            is_callback;
     mdit_rule_fn    fn;
     void           *user;
     /* alt-chain tags. We copy the array into the ruler's arena so
@@ -135,6 +136,7 @@ static mdit_rule_status make_status(int idx, const char *msg)
 static mdit_rule_status insert_at(mdit_ruler *r, size_t pos,
                                   mdit_str name,
                                   mdit_rule_fn fn, void *user,
+                                  bool is_callback,
                                   mdit_rule_options opts)
 {
     if (find_rule(r, name) != -1) {
@@ -150,12 +152,13 @@ static mdit_rule_status insert_at(mdit_ruler *r, size_t pos,
                 (len - 1 - pos) * sizeof(mdit_rule_record));
     }
     mdit_rule_record *slot = &r->rules.data[pos];
-    slot->name    = name;
-    slot->enabled = true;
-    slot->fn      = fn;
-    slot->user    = user;
-    slot->alt     = clone_alt(r->arena, &opts);
-    slot->alt_len = opts.alt_len;
+    slot->name        = name;
+    slot->enabled     = true;
+    slot->is_callback = is_callback;
+    slot->fn          = fn;
+    slot->user        = user;
+    slot->alt         = clone_alt(r->arena, &opts);
+    slot->alt_len     = opts.alt_len;
 
     mark_dirty(r);
     return make_status((int)pos, NULL);
@@ -169,7 +172,7 @@ mdit_rule_status mdit_ruler_push(mdit_ruler *r,
                                  mdit_rule_fn fn, void *user,
                                  mdit_rule_options opts)
 {
-    return insert_at(r, r->rules.len, rule_name, fn, user, opts);
+    return insert_at(r, r->rules.len, rule_name, fn, user, false, opts);
 }
 
 mdit_rule_status mdit_ruler_before(mdit_ruler *r,
@@ -182,7 +185,7 @@ mdit_rule_status mdit_ruler_before(mdit_ruler *r,
     if (idx < 0) {
         return make_status(MDIT_RULE_NOT_FOUND, "anchor rule not found");
     }
-    return insert_at(r, (size_t)idx, rule_name, fn, user, opts);
+    return insert_at(r, (size_t)idx, rule_name, fn, user, false, opts);
 }
 
 mdit_rule_status mdit_ruler_after(mdit_ruler *r,
@@ -195,7 +198,7 @@ mdit_rule_status mdit_ruler_after(mdit_ruler *r,
     if (idx < 0) {
         return make_status(MDIT_RULE_NOT_FOUND, "anchor rule not found");
     }
-    return insert_at(r, (size_t)idx + 1, rule_name, fn, user, opts);
+    return insert_at(r, (size_t)idx + 1, rule_name, fn, user, false, opts);
 }
 
 mdit_rule_status mdit_ruler_at(mdit_ruler *r,
@@ -208,10 +211,71 @@ mdit_rule_status mdit_ruler_at(mdit_ruler *r,
         return make_status(MDIT_RULE_NOT_FOUND, "rule not found");
     }
     mdit_rule_record *slot = &r->rules.data[idx];
-    slot->fn      = fn;
-    slot->user    = user;
-    slot->alt     = clone_alt(r->arena, &opts);
-    slot->alt_len = opts.alt_len;
+    slot->is_callback = false;
+    slot->fn          = fn;
+    slot->user        = user;
+    slot->alt         = clone_alt(r->arena, &opts);
+    slot->alt_len     = opts.alt_len;
+    /* `at` does NOT touch enabled flag — matches upstream. */
+    mark_dirty(r);
+    return make_status(idx, NULL);
+}
+
+/* ---------------------------------------------------------------------
+ * Callback-variant mutators
+ *
+ * Mirror the typed mutators above but set ``is_callback = true`` on the
+ * record so the dispatcher passes the user pointer through to the rule.
+ * ------------------------------------------------------------------- */
+mdit_rule_status mdit_ruler_push_callback(mdit_ruler *r,
+                                          mdit_str rule_name,
+                                          mdit_rule_fn fn, void *user,
+                                          mdit_rule_options opts)
+{
+    return insert_at(r, r->rules.len, rule_name, fn, user, true, opts);
+}
+
+mdit_rule_status mdit_ruler_before_callback(mdit_ruler *r,
+                                            mdit_str before_name,
+                                            mdit_str rule_name,
+                                            mdit_rule_fn fn, void *user,
+                                            mdit_rule_options opts)
+{
+    int idx = find_rule(r, before_name);
+    if (idx < 0) {
+        return make_status(MDIT_RULE_NOT_FOUND, "anchor rule not found");
+    }
+    return insert_at(r, (size_t)idx, rule_name, fn, user, true, opts);
+}
+
+mdit_rule_status mdit_ruler_after_callback(mdit_ruler *r,
+                                           mdit_str after_name,
+                                           mdit_str rule_name,
+                                           mdit_rule_fn fn, void *user,
+                                           mdit_rule_options opts)
+{
+    int idx = find_rule(r, after_name);
+    if (idx < 0) {
+        return make_status(MDIT_RULE_NOT_FOUND, "anchor rule not found");
+    }
+    return insert_at(r, (size_t)idx + 1, rule_name, fn, user, true, opts);
+}
+
+mdit_rule_status mdit_ruler_at_callback(mdit_ruler *r,
+                                        mdit_str rule_name,
+                                        mdit_rule_fn fn, void *user,
+                                        mdit_rule_options opts)
+{
+    int idx = find_rule(r, rule_name);
+    if (idx < 0) {
+        return make_status(MDIT_RULE_NOT_FOUND, "rule not found");
+    }
+    mdit_rule_record *slot = &r->rules.data[idx];
+    slot->is_callback = true;
+    slot->fn          = fn;
+    slot->user        = user;
+    slot->alt         = clone_alt(r->arena, &opts);
+    slot->alt_len     = opts.alt_len;
     /* `at` does NOT touch enabled flag — matches upstream. */
     mark_dirty(r);
     return make_status(idx, NULL);
@@ -328,8 +392,9 @@ static void rebuild_cache(mdit_ruler *r)
                 if (!found) continue;
             }
             mdit_rule_entry *e = mdit_vec_rule_entries_emplace(&cc->entries);
-            e->fn   = rec->fn;
-            e->user = rec->user;
+            e->fn          = rec->fn;
+            e->user        = rec->user;
+            e->is_callback = rec->is_callback;
         }
     }
     r->cache_dirty = false;

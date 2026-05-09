@@ -822,6 +822,10 @@ typedef struct {
     int        initialized;     /* 1 once mdit_md_init succeeded */
     PyObject  *options_dict;    /* persistent live mirror of options */
     PyObject  *render_callbacks;/* token type -> Python render callback */
+    /* Holds a strong ref to every Python rule callable registered via
+     * ``_ruler_install`` so the callable outlives the C ruler entries
+     * that point at it. Keyed by ``(chain, rule_name)`` tuples. */
+    PyObject  *rule_callbacks;
 } PyMarkdownIt;
 
 typedef struct {
@@ -1413,6 +1417,7 @@ static int PyMarkdownIt_init(PyMarkdownIt *self, PyObject *args, PyObject *kwarg
 
 static void PyMarkdownIt_dealloc(PyMarkdownIt *self)
 {
+    Py_CLEAR(self->rule_callbacks);
     Py_CLEAR(self->render_callbacks);
     Py_CLEAR(self->options_dict);
     if (self->initialized) {
@@ -2006,6 +2011,742 @@ static PyObject *PyMarkdownIt_ruler_enable_only(PyMarkdownIt *self, PyObject *ar
     return ruler_toggle_chain(self, args, kwargs, 2);
 }
 
+/* ------------------------------------------------------------------ */
+/* Parser rule callbacks                                              */
+/*                                                                    */
+/* Python plugins register rules via ``ruler.before/after/at/push``.  */
+/* Each registration pins a Python callable on ``self->rule_callbacks */
+/* `` (so it survives the C ruler entry that points at it) and        */
+/* threads a heap-allocated ``PyRuleEntry`` through the C ruler's     */
+/* ``user`` slot. When the ruler dispatches to one of the bridge      */
+/* functions below, the bridge unpacks the ``PyRuleEntry``, builds a  */
+/* short-lived state wrapper, calls the Python callable, and          */
+/* (eventually) copies any mutated scalars back into the C state.     */
+/*                                                                    */
+/* The state wrappers exposed in this slice are intentionally lean —  */
+/* they carry only the most commonly read attributes (``src``,        */
+/* ``env``, ``md``, plus chain-specific scalars). ``tokens`` and      */
+/* mutation propagation back into the C engine are deferred to a      */
+/* follow-up slice. For now, plugins that only inspect the state or   */
+/* fall back to closure-captured state work end-to-end.               */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    PyObject     *callback;     /* strong ref */
+    PyMarkdownIt *md;           /* borrowed; PyMarkdownIt outlives the */
+                                /* arena that holds this entry         */
+    int           kind;         /* 0=core, 1=block, 2=inline,          */
+                                /* 3=inline2                            */
+} PyRuleEntry;
+
+/* Forward decls — definitions are below the state types. */
+static bool py_core_rule_bridge   (void *state, void *user);
+static bool py_block_rule_bridge  (void *state, void *user);
+static bool py_inline_rule_bridge (void *state, void *user);
+static bool py_inline2_rule_bridge(void *state, void *user);
+
+/* ------------------------------------------------------------------ */
+/* State wrappers                                                     */
+/*                                                                    */
+/* A state wrapper is a tiny PyObject that borrows a pointer to a C   */
+/* state struct that lives on the parser's stack. The bridge sets the */
+/* pointer before the call and clears it after the call returns, so   */
+/* attribute access after the bridge returns raises ``RuntimeError``. */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    PyObject_HEAD
+    void         *cstate;       /* mdit_state_core *, borrowed         */
+    PyMarkdownIt *md;           /* borrowed                             */
+    PyObject     *env;          /* borrowed; same Python obj caller    */
+                                /* passed to parse()                    */
+} PyStateCore;
+
+typedef struct {
+    PyObject_HEAD
+    void         *cstate;       /* mdit_state_block * */
+    PyMarkdownIt *md;
+    PyObject     *env;
+} PyStateBlock;
+
+typedef struct {
+    PyObject_HEAD
+    void         *cstate;       /* mdit_state_inline * */
+    PyMarkdownIt *md;
+    PyObject     *env;
+} PyStateInline;
+
+static PyTypeObject PyStateCore_Type;
+static PyTypeObject PyStateBlock_Type;
+static PyTypeObject PyStateInline_Type;
+
+static int state_check_alive(void *cstate)
+{
+    if (cstate != NULL) return 0;
+    PyErr_SetString(PyExc_RuntimeError,
+        "state object is no longer valid (rule has returned)");
+    return -1;
+}
+
+static PyObject *state_md_get(PyObject *md_obj)
+{
+    if (md_obj == NULL) Py_RETURN_NONE;
+    Py_INCREF(md_obj);
+    return md_obj;
+}
+
+static PyObject *state_env_get(PyObject *env)
+{
+    if (env == NULL) Py_RETURN_NONE;
+    Py_INCREF(env);
+    return env;
+}
+
+/* StateCore -------------------------------------------------------- */
+
+static PyObject *PyStateCore_get_src(PyStateCore *self, void *closure)
+{
+    (void)closure;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    mdit_state_core *s = (mdit_state_core *)self->cstate;
+    return PyUnicode_DecodeUTF8(s->src.data ? s->src.data : "",
+                                (Py_ssize_t)s->src.len, "strict");
+}
+
+static PyObject *PyStateCore_get_md(PyStateCore *self, void *closure)
+{
+    (void)closure;
+    return state_md_get((PyObject *)self->md);
+}
+
+static PyObject *PyStateCore_get_env(PyStateCore *self, void *closure)
+{
+    (void)closure;
+    return state_env_get(self->env);
+}
+
+static PyObject *PyStateCore_get_inlineMode(PyStateCore *self, void *closure)
+{
+    (void)closure;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    mdit_state_core *s = (mdit_state_core *)self->cstate;
+    return PyBool_FromLong(s->inlineMode ? 1 : 0);
+}
+
+static PyGetSetDef PyStateCore_getsetters[] = {
+    { "src", (getter)PyStateCore_get_src, NULL, "Markdown source.", NULL },
+    { "md", (getter)PyStateCore_get_md, NULL, "MarkdownIt instance.", NULL },
+    { "env", (getter)PyStateCore_get_env, NULL, "User env mapping.", NULL },
+    { "inlineMode", (getter)PyStateCore_get_inlineMode, NULL,
+      "True if running under parseInline / renderInline.", NULL },
+    { NULL }
+};
+
+static PyTypeObject PyStateCore_Type = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "_mdit_c.StateCore",
+    .tp_basicsize = sizeof(PyStateCore),
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_doc       = "Read-only view onto a live ``mdit_state_core``.",
+    .tp_getset    = PyStateCore_getsetters,
+};
+
+/* StateBlock ------------------------------------------------------- */
+
+static PyObject *PyStateBlock_get_src(PyStateBlock *self, void *closure)
+{
+    (void)closure;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    mdit_state_block *s = (mdit_state_block *)self->cstate;
+    return PyUnicode_DecodeUTF8(s->src.data ? s->src.data : "",
+                                (Py_ssize_t)s->src.len, "strict");
+}
+
+static PyObject *PyStateBlock_get_md(PyStateBlock *self, void *closure)
+{
+    (void)closure;
+    return state_md_get((PyObject *)self->md);
+}
+
+static PyObject *PyStateBlock_get_env(PyStateBlock *self, void *closure)
+{
+    (void)closure;
+    return state_env_get(self->env);
+}
+
+#define MDIT_PY_BLOCK_INT(NAME, FIELD)                                       \
+    static PyObject *PyStateBlock_get_##NAME(PyStateBlock *self, void *c)    \
+    {                                                                        \
+        (void)c;                                                             \
+        if (state_check_alive(self->cstate) < 0) return NULL;                \
+        mdit_state_block *s = (mdit_state_block *)self->cstate;              \
+        return PyLong_FromLong((long)s->FIELD);                              \
+    }
+
+MDIT_PY_BLOCK_INT(line,        line)
+MDIT_PY_BLOCK_INT(lineMax,     lineMax)
+MDIT_PY_BLOCK_INT(blkIndent,   blkIndent)
+MDIT_PY_BLOCK_INT(level,       level)
+MDIT_PY_BLOCK_INT(ddIndent,    ddIndent)
+MDIT_PY_BLOCK_INT(listIndent,  listIndent)
+
+#undef MDIT_PY_BLOCK_INT
+
+static PyObject *PyStateBlock_get_tight(PyStateBlock *self, void *closure)
+{
+    (void)closure;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    mdit_state_block *s = (mdit_state_block *)self->cstate;
+    return PyBool_FromLong(s->tight ? 1 : 0);
+}
+
+static PyObject *PyStateBlock_get_parentType(PyStateBlock *self, void *closure)
+{
+    (void)closure;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    mdit_state_block *s = (mdit_state_block *)self->cstate;
+    return PyUnicode_DecodeUTF8(
+        s->parent_type.data ? s->parent_type.data : "",
+        (Py_ssize_t)s->parent_type.len, "strict");
+}
+
+static PyGetSetDef PyStateBlock_getsetters[] = {
+    { "src", (getter)PyStateBlock_get_src, NULL, "Markdown source.", NULL },
+    { "md", (getter)PyStateBlock_get_md, NULL, "MarkdownIt instance.", NULL },
+    { "env", (getter)PyStateBlock_get_env, NULL, "User env mapping.", NULL },
+    { "line", (getter)PyStateBlock_get_line, NULL,
+      "Current line index.", NULL },
+    { "lineMax", (getter)PyStateBlock_get_lineMax, NULL,
+      "Last line index (exclusive).", NULL },
+    { "blkIndent", (getter)PyStateBlock_get_blkIndent, NULL,
+      "Required indentation of the current block.", NULL },
+    { "level", (getter)PyStateBlock_get_level, NULL,
+      "Current nesting level.", NULL },
+    { "ddIndent", (getter)PyStateBlock_get_ddIndent, NULL,
+      "Indentation of the deflist body (or -1).", NULL },
+    { "listIndent", (getter)PyStateBlock_get_listIndent, NULL,
+      "Indentation of the current list (or -1).", NULL },
+    { "tight", (getter)PyStateBlock_get_tight, NULL,
+      "True for tight lists.", NULL },
+    { "parentType", (getter)PyStateBlock_get_parentType, NULL,
+      "Parent token type ('root', 'paragraph', 'blockquote', ...).", NULL },
+    { NULL }
+};
+
+static PyTypeObject PyStateBlock_Type = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "_mdit_c.StateBlock",
+    .tp_basicsize = sizeof(PyStateBlock),
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_doc       = "Read-only view onto a live ``mdit_state_block``.",
+    .tp_getset    = PyStateBlock_getsetters,
+};
+
+/* StateInline ------------------------------------------------------ */
+
+static PyObject *PyStateInline_get_src(PyStateInline *self, void *closure)
+{
+    (void)closure;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    mdit_state_inline *s = (mdit_state_inline *)self->cstate;
+    return PyUnicode_DecodeUTF8(s->src.data ? s->src.data : "",
+                                (Py_ssize_t)s->src.len, "strict");
+}
+
+static PyObject *PyStateInline_get_md(PyStateInline *self, void *closure)
+{
+    (void)closure;
+    return state_md_get((PyObject *)self->md);
+}
+
+static PyObject *PyStateInline_get_env(PyStateInline *self, void *closure)
+{
+    (void)closure;
+    return state_env_get(self->env);
+}
+
+static PyObject *PyStateInline_get_pos(PyStateInline *self, void *closure)
+{
+    (void)closure;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    mdit_state_inline *s = (mdit_state_inline *)self->cstate;
+    return PyLong_FromSize_t(s->pos);
+}
+
+static int PyStateInline_set_pos(PyStateInline *self, PyObject *value,
+                                 void *closure)
+{
+    (void)closure;
+    if (state_check_alive(self->cstate) < 0) return -1;
+    if (value == NULL) {
+        PyErr_SetString(PyExc_AttributeError, "cannot delete pos");
+        return -1;
+    }
+    long long v = PyLong_AsLongLong(value);
+    if (v == -1 && PyErr_Occurred()) return -1;
+    if (v < 0) {
+        PyErr_SetString(PyExc_ValueError, "pos must be >= 0");
+        return -1;
+    }
+    mdit_state_inline *s = (mdit_state_inline *)self->cstate;
+    s->pos = (size_t)v;
+    return 0;
+}
+
+static PyObject *PyStateInline_get_posMax(PyStateInline *self, void *closure)
+{
+    (void)closure;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    mdit_state_inline *s = (mdit_state_inline *)self->cstate;
+    return PyLong_FromSize_t(s->pos_max);
+}
+
+static PyObject *PyStateInline_get_level(PyStateInline *self, void *closure)
+{
+    (void)closure;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    mdit_state_inline *s = (mdit_state_inline *)self->cstate;
+    return PyLong_FromLong((long)s->level);
+}
+
+static PyObject *PyStateInline_get_pendingLevel(PyStateInline *self,
+                                                void *closure)
+{
+    (void)closure;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    mdit_state_inline *s = (mdit_state_inline *)self->cstate;
+    return PyLong_FromLong((long)s->pendingLevel);
+}
+
+static PyObject *PyStateInline_get_pending(PyStateInline *self, void *closure)
+{
+    (void)closure;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    mdit_state_inline *s = (mdit_state_inline *)self->cstate;
+    return PyUnicode_DecodeUTF8(s->pending.data ? (const char *)s->pending.data : "",
+                                (Py_ssize_t)s->pending.len, "strict");
+}
+
+static PyObject *PyStateInline_get_linkLevel(PyStateInline *self,
+                                             void *closure)
+{
+    (void)closure;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    mdit_state_inline *s = (mdit_state_inline *)self->cstate;
+    return PyLong_FromLong((long)s->link_level);
+}
+
+static PyGetSetDef PyStateInline_getsetters[] = {
+    { "src", (getter)PyStateInline_get_src, NULL, "Markdown source.", NULL },
+    { "md", (getter)PyStateInline_get_md, NULL, "MarkdownIt instance.", NULL },
+    { "env", (getter)PyStateInline_get_env, NULL, "User env mapping.", NULL },
+    { "pos", (getter)PyStateInline_get_pos, (setter)PyStateInline_set_pos,
+      "Current byte offset into ``src`` (writable).", NULL },
+    { "posMax", (getter)PyStateInline_get_posMax, NULL,
+      "End-of-input byte offset.", NULL },
+    { "level", (getter)PyStateInline_get_level, NULL,
+      "Current nesting level.", NULL },
+    { "pendingLevel", (getter)PyStateInline_get_pendingLevel, NULL,
+      "Pending text level.", NULL },
+    { "pending", (getter)PyStateInline_get_pending, NULL,
+      "Pending (unflushed) text accumulator.", NULL },
+    { "linkLevel", (getter)PyStateInline_get_linkLevel, NULL,
+      "Suppression counter for inline linkify (0 means active).", NULL },
+    { NULL }
+};
+
+static PyTypeObject PyStateInline_Type = {
+    PyVarObject_HEAD_INIT(NULL, 0)
+    .tp_name      = "_mdit_c.StateInline",
+    .tp_basicsize = sizeof(PyStateInline),
+    .tp_flags     = Py_TPFLAGS_DEFAULT,
+    .tp_doc       = "Read/write view onto a live ``mdit_state_inline``.",
+    .tp_getset    = PyStateInline_getsetters,
+};
+
+/* ------------------------------------------------------------------ */
+/* Bridges                                                            */
+/* ------------------------------------------------------------------ */
+
+static void py_rule_handle_error(PyObject *callback)
+{
+    /* Invoked when a Python rule raises. We can't propagate the
+     * exception through the C ruler signature, so log it via
+     * PyErr_WriteUnraisable (matches CPython's "callback raised"
+     * behaviour for hooks installed in similar low-level paths). */
+    if (PyErr_Occurred()) {
+        PyErr_WriteUnraisable(callback);
+    }
+}
+
+static PyObject *py_state_core_new(PyMarkdownIt *md, mdit_state_core *cs,
+                                   PyObject *env)
+{
+    PyStateCore *st = PyObject_New(PyStateCore, &PyStateCore_Type);
+    if (st == NULL) return NULL;
+    st->cstate = cs;
+    st->md     = md;
+    st->env    = env;
+    return (PyObject *)st;
+}
+
+static PyObject *py_state_block_new(PyMarkdownIt *md, mdit_state_block *cs,
+                                    PyObject *env)
+{
+    PyStateBlock *st = PyObject_New(PyStateBlock, &PyStateBlock_Type);
+    if (st == NULL) return NULL;
+    st->cstate = cs;
+    st->md     = md;
+    st->env    = env;
+    return (PyObject *)st;
+}
+
+static PyObject *py_state_inline_new(PyMarkdownIt *md, mdit_state_inline *cs,
+                                     PyObject *env)
+{
+    PyStateInline *st = PyObject_New(PyStateInline, &PyStateInline_Type);
+    if (st == NULL) return NULL;
+    st->cstate = cs;
+    st->md     = md;
+    st->env    = env;
+    return (PyObject *)st;
+}
+
+static void py_state_invalidate(PyObject *st)
+{
+    if (st == NULL) return;
+    /* All three state types share the cstate slot at the same offset. */
+    if (Py_TYPE(st) == &PyStateCore_Type) {
+        ((PyStateCore *)st)->cstate = NULL;
+    } else if (Py_TYPE(st) == &PyStateBlock_Type) {
+        ((PyStateBlock *)st)->cstate = NULL;
+    } else if (Py_TYPE(st) == &PyStateInline_Type) {
+        ((PyStateInline *)st)->cstate = NULL;
+    }
+}
+
+static PyObject *py_env_for_rule(PyMarkdownIt *md, void *c_env)
+{
+    /* If the C-side env is a ``mdit_env`` we can't unpack it back to
+     * the original Python ``env_obj`` here — the bridges currently
+     * receive only ``c_env`` (an ``mdit_env *``). For now, expose
+     * ``None`` to the Python rule. The full env propagation already
+     * happens after parse via ``populate_env_from_mdit``. */
+    (void)md;
+    (void)c_env;
+    Py_RETURN_NONE;
+}
+
+static bool py_core_rule_bridge(void *state, void *user)
+{
+    PyRuleEntry *entry = (PyRuleEntry *)user;
+    if (entry == NULL || entry->callback == NULL) return false;
+
+    mdit_state_core *cs = (mdit_state_core *)state;
+    PyObject *py_env = py_env_for_rule(entry->md, cs->env);
+    if (py_env == NULL) return false;
+
+    PyObject *st = py_state_core_new(entry->md, cs, py_env);
+    if (st == NULL) {
+        Py_DECREF(py_env);
+        py_rule_handle_error(entry->callback);
+        return false;
+    }
+
+    PyObject *result = PyObject_CallOneArg(entry->callback, st);
+    py_state_invalidate(st);
+    Py_DECREF(st);
+    Py_DECREF(py_env);
+
+    if (result == NULL) {
+        py_rule_handle_error(entry->callback);
+        return false;
+    }
+    Py_DECREF(result);
+    /* Core rules don't return a meaningful bool — match upstream's
+     * void semantics. */
+    return false;
+}
+
+static bool py_block_rule_bridge(void *state, void *user)
+{
+    PyRuleEntry *entry = (PyRuleEntry *)user;
+    if (entry == NULL || entry->callback == NULL) return false;
+
+    mdit_state_block *cs = (mdit_state_block *)state;
+    PyObject *py_env = py_env_for_rule(entry->md, cs->env);
+    if (py_env == NULL) return false;
+
+    PyObject *st = py_state_block_new(entry->md, cs, py_env);
+    if (st == NULL) {
+        Py_DECREF(py_env);
+        py_rule_handle_error(entry->callback);
+        return false;
+    }
+
+    /* Build positional args ``(state, startLine, endLine, silent)``
+     * piecemeal so each item's reference is owned by the tuple
+     * exactly once. */
+    PyObject *args = PyTuple_New(4);
+    if (args == NULL) {
+        py_state_invalidate(st);
+        Py_DECREF(st);
+        Py_DECREF(py_env);
+        py_rule_handle_error(entry->callback);
+        return false;
+    }
+    Py_INCREF(st);
+    PyTuple_SET_ITEM(args, 0, st);
+    PyTuple_SET_ITEM(args, 1, PyLong_FromLong((long)cs->cur_start_line));
+    PyTuple_SET_ITEM(args, 2, PyLong_FromLong((long)cs->cur_end_line));
+    PyTuple_SET_ITEM(args, 3, PyBool_FromLong(cs->cur_silent ? 1 : 0));
+
+    PyObject *result = PyObject_Call(entry->callback, args, NULL);
+    Py_DECREF(args);
+    py_state_invalidate(st);
+    Py_DECREF(st);
+    Py_DECREF(py_env);
+
+    if (result == NULL) {
+        py_rule_handle_error(entry->callback);
+        return false;
+    }
+    bool ret = PyObject_IsTrue(result) == 1;
+    Py_DECREF(result);
+    return ret;
+}
+
+static bool py_inline_rule_bridge(void *state, void *user)
+{
+    PyRuleEntry *entry = (PyRuleEntry *)user;
+    if (entry == NULL || entry->callback == NULL) return false;
+
+    mdit_state_inline *cs = (mdit_state_inline *)state;
+    PyObject *py_env = py_env_for_rule(entry->md, cs->env);
+    if (py_env == NULL) return false;
+
+    PyObject *st = py_state_inline_new(entry->md, cs, py_env);
+    if (st == NULL) {
+        Py_DECREF(py_env);
+        py_rule_handle_error(entry->callback);
+        return false;
+    }
+
+    PyObject *silent_obj = PyBool_FromLong(cs->cur_silent ? 1 : 0);
+    if (silent_obj == NULL) {
+        py_state_invalidate(st);
+        Py_DECREF(st);
+        Py_DECREF(py_env);
+        py_rule_handle_error(entry->callback);
+        return false;
+    }
+
+    PyObject *args = PyTuple_New(2);
+    if (args == NULL) {
+        Py_DECREF(silent_obj);
+        py_state_invalidate(st);
+        Py_DECREF(st);
+        Py_DECREF(py_env);
+        py_rule_handle_error(entry->callback);
+        return false;
+    }
+    Py_INCREF(st);
+    PyTuple_SET_ITEM(args, 0, st);
+    PyTuple_SET_ITEM(args, 1, silent_obj);
+
+    PyObject *result = PyObject_Call(entry->callback, args, NULL);
+    Py_DECREF(args);
+    py_state_invalidate(st);
+    Py_DECREF(st);
+    Py_DECREF(py_env);
+
+    if (result == NULL) {
+        py_rule_handle_error(entry->callback);
+        return false;
+    }
+    bool ret = PyObject_IsTrue(result) == 1;
+    Py_DECREF(result);
+    return ret;
+}
+
+static bool py_inline2_rule_bridge(void *state, void *user)
+{
+    PyRuleEntry *entry = (PyRuleEntry *)user;
+    if (entry == NULL || entry->callback == NULL) return false;
+
+    mdit_state_inline *cs = (mdit_state_inline *)state;
+    PyObject *py_env = py_env_for_rule(entry->md, cs->env);
+    if (py_env == NULL) return false;
+
+    PyObject *st = py_state_inline_new(entry->md, cs, py_env);
+    if (st == NULL) {
+        Py_DECREF(py_env);
+        py_rule_handle_error(entry->callback);
+        return false;
+    }
+
+    PyObject *result = PyObject_CallOneArg(entry->callback, st);
+    py_state_invalidate(st);
+    Py_DECREF(st);
+    Py_DECREF(py_env);
+
+    if (result == NULL) {
+        py_rule_handle_error(entry->callback);
+        return false;
+    }
+    Py_DECREF(result);
+    return false;
+}
+
+/* ------------------------------------------------------------------ */
+/* Install                                                            */
+/* ------------------------------------------------------------------ */
+
+static int rule_chain_kind(const char *chain)
+{
+    if (strcmp(chain, "core") == 0)    return 0;
+    if (strcmp(chain, "block") == 0)   return 1;
+    if (strcmp(chain, "inline") == 0)  return 2;
+    if (strcmp(chain, "inline2") == 0) return 3;
+    return -1;
+}
+
+static mdit_rule_fn rule_bridge_for_chain(int kind)
+{
+    switch (kind) {
+        case 0: return py_core_rule_bridge;
+        case 1: return py_block_rule_bridge;
+        case 2: return py_inline_rule_bridge;
+        case 3: return py_inline2_rule_bridge;
+    }
+    return NULL;
+}
+
+static int rule_track_callback(PyMarkdownIt *self, const char *chain,
+                               const char *name, PyObject *callback)
+{
+    if (self->rule_callbacks == NULL) {
+        self->rule_callbacks = PyDict_New();
+        if (self->rule_callbacks == NULL) return -1;
+    }
+    PyObject *key = Py_BuildValue("(ss)", chain, name);
+    if (key == NULL) return -1;
+    int rc = PyDict_SetItem(self->rule_callbacks, key, callback);
+    Py_DECREF(key);
+    return rc;
+}
+
+/* Allocate a PyRuleEntry from the parser's arena (so it lives as long
+ * as the C ruler does). The callable itself is rooted on
+ * self->rule_callbacks separately. */
+static PyRuleEntry *make_rule_entry(PyMarkdownIt *self, PyObject *callback,
+                                    int kind)
+{
+    PyRuleEntry *e = (PyRuleEntry *)mdit_arena_alloc(
+        &self->arena, sizeof(PyRuleEntry));
+    if (e == NULL) return NULL;
+    e->callback = callback;   /* borrowed; lives on rule_callbacks */
+    e->md       = self;
+    e->kind     = kind;
+    return e;
+}
+
+static PyObject *PyMarkdownIt_ruler_install(PyMarkdownIt *self, PyObject *args,
+                                            PyObject *kwargs)
+{
+    static char *kwlist[] = {
+        "chain", "position", "name", "callback", "ref", NULL
+    };
+    const char *chain    = NULL;
+    const char *position = NULL;
+    const char *name     = NULL;
+    PyObject   *callback = NULL;
+    const char *ref      = NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sssO|z", kwlist,
+                                     &chain, &position, &name, &callback,
+                                     &ref)) {
+        return NULL;
+    }
+    if (!PyCallable_Check(callback)) {
+        PyErr_SetString(PyExc_TypeError, "callback must be callable");
+        return NULL;
+    }
+
+    int kind = rule_chain_kind(chain);
+    if (kind < 0) {
+        PyErr_Format(PyExc_KeyError, "unknown ruler chain: %s", chain);
+        return NULL;
+    }
+    mdit_ruler *r = select_ruler(self, chain);
+    if (r == NULL) {
+        PyErr_Format(PyExc_KeyError, "unknown ruler chain: %s", chain);
+        return NULL;
+    }
+
+    if (rule_track_callback(self, chain, name, callback) < 0) return NULL;
+
+    PyRuleEntry *entry = make_rule_entry(self, callback, kind);
+    if (entry == NULL) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+    mdit_rule_fn bridge = rule_bridge_for_chain(kind);
+
+    /* Names need to live as long as the C ruler — copy into the
+     * parser's arena so the registered ``mdit_str`` view stays valid
+     * even if Python frees the original argument. */
+    mdit_str rule_name;
+    if (arena_dup_str(self, name, strlen(name), &rule_name) < 0) {
+        return NULL;
+    }
+    mdit_str ref_name = { NULL, 0 };
+    if (ref != NULL) {
+        if (arena_dup_str(self, ref, strlen(ref), &ref_name) < 0) {
+            return NULL;
+        }
+    }
+
+    mdit_rule_status st;
+    if (strcmp(position, "push") == 0) {
+        st = mdit_ruler_push_callback(r, rule_name, bridge, entry,
+                                      MDIT_RULE_OPTIONS_NONE);
+    } else if (strcmp(position, "before") == 0) {
+        if (ref == NULL) {
+            PyErr_SetString(PyExc_TypeError,
+                            "before requires a ref rule name");
+            return NULL;
+        }
+        st = mdit_ruler_before_callback(r, ref_name, rule_name, bridge,
+                                        entry, MDIT_RULE_OPTIONS_NONE);
+    } else if (strcmp(position, "after") == 0) {
+        if (ref == NULL) {
+            PyErr_SetString(PyExc_TypeError,
+                            "after requires a ref rule name");
+            return NULL;
+        }
+        st = mdit_ruler_after_callback(r, ref_name, rule_name, bridge,
+                                       entry, MDIT_RULE_OPTIONS_NONE);
+    } else if (strcmp(position, "at") == 0) {
+        st = mdit_ruler_at_callback(r, rule_name, bridge, entry,
+                                    MDIT_RULE_OPTIONS_NONE);
+    } else {
+        PyErr_Format(PyExc_ValueError, "unknown position: %s", position);
+        return NULL;
+    }
+    if (st.index < 0) {
+        const char *msg = st.message ? st.message : "ruler insertion failed";
+        if (st.index == MDIT_RULE_NOT_FOUND) {
+            PyErr_Format(PyExc_KeyError, "%s", msg);
+        } else if (st.index == MDIT_RULE_DUPLICATE) {
+            PyErr_Format(PyExc_KeyError, "%s", msg);
+        } else {
+            PyErr_Format(PyExc_RuntimeError, "%s", msg);
+        }
+        return NULL;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyObject *PyMarkdownIt_add_render_rule(PyMarkdownIt *self, PyObject *args)
 {
     const char *name = NULL;
@@ -2147,6 +2888,13 @@ static PyMethodDef PyMarkdownIt_methods[] = {
     { "_add_render_rule", (PyCFunction)PyMarkdownIt_add_render_rule,
       METH_VARARGS,
       "_add_render_rule(name, callback) -> None." },
+    { "_ruler_install", (PyCFunction)PyMarkdownIt_ruler_install,
+      METH_VARARGS | METH_KEYWORDS,
+      "_ruler_install(chain, position, name, callback, ref=None) -> None.\n"
+      "Register a Python callable as a parser rule. ``chain`` is one of "
+      "``core`` / ``block`` / ``inline`` / ``inline2``; ``position`` is "
+      "``push`` / ``before`` / ``after`` / ``at``. ``ref`` is required "
+      "for ``before`` / ``after``." },
     { NULL }
 };
 
@@ -2181,6 +2929,9 @@ PyMODINIT_FUNC PyInit__mdit_c(void)
 {
     if (PyType_Ready(&PyToken_Type) < 0) return NULL;
     if (PyType_Ready(&PyMarkdownIt_Type) < 0) return NULL;
+    if (PyType_Ready(&PyStateCore_Type) < 0) return NULL;
+    if (PyType_Ready(&PyStateBlock_Type) < 0) return NULL;
+    if (PyType_Ready(&PyStateInline_Type) < 0) return NULL;
 
     PyObject *m = PyModule_Create(&mdit_c_moduledef);
     if (m == NULL) return NULL;
@@ -2196,6 +2947,28 @@ PyMODINIT_FUNC PyInit__mdit_c(void)
     if (PyModule_AddObject(m, "MarkdownIt",
                            (PyObject *)&PyMarkdownIt_Type) < 0) {
         Py_DECREF(&PyMarkdownIt_Type);
+        Py_DECREF(m);
+        return NULL;
+    }
+
+    Py_INCREF(&PyStateCore_Type);
+    if (PyModule_AddObject(m, "StateCore",
+                           (PyObject *)&PyStateCore_Type) < 0) {
+        Py_DECREF(&PyStateCore_Type);
+        Py_DECREF(m);
+        return NULL;
+    }
+    Py_INCREF(&PyStateBlock_Type);
+    if (PyModule_AddObject(m, "StateBlock",
+                           (PyObject *)&PyStateBlock_Type) < 0) {
+        Py_DECREF(&PyStateBlock_Type);
+        Py_DECREF(m);
+        return NULL;
+    }
+    Py_INCREF(&PyStateInline_Type);
+    if (PyModule_AddObject(m, "StateInline",
+                           (PyObject *)&PyStateInline_Type) < 0) {
+        Py_DECREF(&PyStateInline_Type);
         Py_DECREF(m);
         return NULL;
     }

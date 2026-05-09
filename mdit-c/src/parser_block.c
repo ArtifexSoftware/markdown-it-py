@@ -2145,11 +2145,17 @@ void mdit_parser_block_tokenize(mdit_parser_block *p,
             break;
         }
         for (size_t i = 0; i < n_rules; ++i) {
-            mdit_block_rule_fn fn = (mdit_block_rule_fn)rules[i].fn;
             state->cur_start_line = line;
             state->cur_end_line   = end_line;
             state->cur_silent     = false;
-            if (fn(state)) break;
+            bool ok;
+            if (rules[i].is_callback) {
+                ok = rules[i].fn(state, rules[i].user);
+            } else {
+                mdit_block_rule_fn fn = (mdit_block_rule_fn)rules[i].fn;
+                ok = fn(state);
+            }
+            if (ok) break;
         }
         state->tight = !hasEmptyLines;
         line = state->line;

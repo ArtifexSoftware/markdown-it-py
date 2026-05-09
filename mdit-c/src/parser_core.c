@@ -1206,7 +1206,11 @@ void mdit_parser_core_process(mdit_parser_core *p, mdit_state_core *state)
     const mdit_rule_entry *rules =
         mdit_ruler_get_rules(p->ruler, MDIT_STR_LIT(""), &n);
     for (size_t i = 0; i < n; ++i) {
-        mdit_core_rule_fn fn = (mdit_core_rule_fn)rules[i].fn;
-        fn(state);
+        if (rules[i].is_callback) {
+            (void)rules[i].fn(state, rules[i].user);
+        } else {
+            mdit_core_rule_fn fn = (mdit_core_rule_fn)rules[i].fn;
+            fn(state);
+        }
     }
 }

@@ -1420,8 +1420,14 @@ static void link_tokenize_inner(mdit_parser_inline *p,
         bool ok = false;
         if (state->level < maxNesting) {
             for (size_t i = 0; i < n_rules; ++i) {
-                mdit_inline_rule_fn fn = (mdit_inline_rule_fn)rules[i].fn;
-                ok = fn(state, false);
+                state->cur_silent = false;
+                if (rules[i].is_callback) {
+                    ok = rules[i].fn(state, rules[i].user);
+                } else {
+                    mdit_inline_rule_fn fn =
+                        (mdit_inline_rule_fn)rules[i].fn;
+                    ok = fn(state, false);
+                }
                 if (ok) break;
             }
         }
@@ -1693,8 +1699,14 @@ static void tokenize(mdit_parser_inline *p, mdit_state_inline *state)
         bool ok = false;
         if (state->level < maxNesting) {
             for (size_t i = 0; i < n_rules; ++i) {
-                mdit_inline_rule_fn fn = (mdit_inline_rule_fn)rules[i].fn;
-                ok = fn(state, false);
+                state->cur_silent = false;
+                if (rules[i].is_callback) {
+                    ok = rules[i].fn(state, rules[i].user);
+                } else {
+                    mdit_inline_rule_fn fn =
+                        (mdit_inline_rule_fn)rules[i].fn;
+                    ok = fn(state, false);
+                }
                 if (ok) break;
             }
         }
@@ -1740,9 +1752,14 @@ void mdit_parser_inline_skip_token(mdit_parser_inline *p,
         const mdit_rule_entry *rules =
             mdit_ruler_get_rules(p->ruler, MDIT_STR_LIT(""), &n_rules);
         for (size_t i = 0; i < n_rules; ++i) {
-            mdit_inline_rule_fn fn = (mdit_inline_rule_fn)rules[i].fn;
             ++state->level;
-            ok = fn(state, true);
+            state->cur_silent = true;
+            if (rules[i].is_callback) {
+                ok = rules[i].fn(state, rules[i].user);
+            } else {
+                mdit_inline_rule_fn fn = (mdit_inline_rule_fn)rules[i].fn;
+                ok = fn(state, true);
+            }
             --state->level;
             if (ok) break;
         }
@@ -1772,8 +1789,12 @@ bool mdit_parser_inline_parse(mdit_parser_inline *p,
     const mdit_rule_entry *rules2 =
         mdit_ruler_get_rules(p->ruler2, MDIT_STR_LIT(""), &n2);
     for (size_t i = 0; i < n2; ++i) {
-        mdit_inline_rule2_fn fn = (mdit_inline_rule2_fn)rules2[i].fn;
-        fn(&state);
+        if (rules2[i].is_callback) {
+            (void)rules2[i].fn(&state, rules2[i].user);
+        } else {
+            mdit_inline_rule2_fn fn = (mdit_inline_rule2_fn)rules2[i].fn;
+            fn(&state);
+        }
     }
     mdit_state_inline_destroy(&state);
     return true;

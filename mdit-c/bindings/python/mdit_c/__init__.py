@@ -4,7 +4,7 @@ The compiled ``._mdit_c`` module owns the parser and renderer. This
 package layers an upstream-shaped Python facade on top so most
 ``markdown_it.MarkdownIt`` user code keeps working without changes.
 
-Supported today (Phase 5, slice 6):
+Supported today (Phase 5, slice 7):
 
 * ``MarkdownIt(config="commonmark", options=None)`` with preset
   aliases ``default``/``js-default``, ``commonmark``, ``zero``,
@@ -45,9 +45,18 @@ Supported today (Phase 5, slice 6):
   ``previous_sibling``, and the ``Token`` property pass-through
   (``tag``, ``attrs``, ``map``, ``level``, ``content``, ``markup``,
   ``info``, ``meta``, ``block``, ``hidden``).
-
-Not exposed yet (queued follow-ups): parser rule callbacks executing
-Python state functions through ``ruler.before/after/at/push``.
+* Parser rule callbacks: ``md.core.ruler.before/after/at/push``,
+  ``md.block.ruler.*``, ``md.inline.ruler.*``, ``md.inline.ruler2.*``
+  accept Python callables. Core rules receive ``state`` (a read-only
+  ``StateCore`` view); block rules receive ``(state, startLine,
+  endLine, silent)``; inline rules receive ``(state, silent)``. State
+  wrappers expose ``src``/``env``/``md`` plus a small set of
+  chain-specific scalars (``inlineMode`` for core; ``line``/
+  ``lineMax``/``blkIndent``/``level``/``tight``/``parentType`` for
+  block; ``pos`` (writable)/``posMax``/``level``/``pendingLevel``/
+  ``pending``/``linkLevel`` for inline). Mutating ``state.tokens``
+  from a Python rule is not yet supported — see the port plan for
+  follow-up scope.
 """
 
 from __future__ import annotations
@@ -163,21 +172,59 @@ class Ruler:
     ) -> list[str]:
         return self._parser._ruler_enable_only(self._chain, names, ignoreInvalid)
 
-    def before(self, *args: Any, **kwargs: Any) -> None:
-        del args, kwargs
-        raise NotImplementedError("Python parser rule callbacks are not exposed yet")
+    def before(
+        self,
+        beforeName: str,
+        ruleName: str,
+        fn: Callable[..., Any],
+        options: dict[str, Any] | None = None,
+    ) -> None:
+        if options:
+            raise NotImplementedError(
+                "rule options (e.g. alt chains) are not yet supported"
+            )
+        self._parser._ruler_install(
+            self._chain, "before", ruleName, fn, beforeName
+        )
 
-    def after(self, *args: Any, **kwargs: Any) -> None:
-        del args, kwargs
-        raise NotImplementedError("Python parser rule callbacks are not exposed yet")
+    def after(
+        self,
+        afterName: str,
+        ruleName: str,
+        fn: Callable[..., Any],
+        options: dict[str, Any] | None = None,
+    ) -> None:
+        if options:
+            raise NotImplementedError(
+                "rule options (e.g. alt chains) are not yet supported"
+            )
+        self._parser._ruler_install(
+            self._chain, "after", ruleName, fn, afterName
+        )
 
-    def at(self, *args: Any, **kwargs: Any) -> None:
-        del args, kwargs
-        raise NotImplementedError("Python parser rule callbacks are not exposed yet")
+    def at(
+        self,
+        ruleName: str,
+        fn: Callable[..., Any],
+        options: dict[str, Any] | None = None,
+    ) -> None:
+        if options:
+            raise NotImplementedError(
+                "rule options (e.g. alt chains) are not yet supported"
+            )
+        self._parser._ruler_install(self._chain, "at", ruleName, fn)
 
-    def push(self, *args: Any, **kwargs: Any) -> None:
-        del args, kwargs
-        raise NotImplementedError("Python parser rule callbacks are not exposed yet")
+    def push(
+        self,
+        ruleName: str,
+        fn: Callable[..., Any],
+        options: dict[str, Any] | None = None,
+    ) -> None:
+        if options:
+            raise NotImplementedError(
+                "rule options (e.g. alt chains) are not yet supported"
+            )
+        self._parser._ruler_install(self._chain, "push", ruleName, fn)
 
 
 class _ParserFacade:

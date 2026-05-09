@@ -115,15 +115,54 @@ int  mdit_ruler_disable    (mdit_ruler *r,
                             bool ignore_invalid);
 
 /* ---------------------------------------------------------------------
+ * Callback variants
+ *
+ * The standard ``mdit_ruler_{push,before,after,at}`` register rules with
+ * the chain-specific typed signature (``mdit_core_rule_fn`` etc). The
+ * dispatchers cast through the typed signature and ignore ``user``.
+ *
+ * The ``_callback`` variants below register a rule with the *generic*
+ * ``mdit_rule_fn`` signature, and the dispatcher passes ``user`` along
+ * verbatim. This is the path Python plugins (and any other downstream
+ * caller that wants the user pointer threaded through) take.
+ *
+ * The two flavours coexist on the same ruler — built-in C rules use the
+ * typed path, plugin rules use the callback path.
+ * ------------------------------------------------------------------- */
+mdit_rule_status mdit_ruler_push_callback  (mdit_ruler *r,
+                                            mdit_str rule_name,
+                                            mdit_rule_fn fn, void *user,
+                                            mdit_rule_options opts);
+mdit_rule_status mdit_ruler_before_callback(mdit_ruler *r,
+                                            mdit_str before_name,
+                                            mdit_str rule_name,
+                                            mdit_rule_fn fn, void *user,
+                                            mdit_rule_options opts);
+mdit_rule_status mdit_ruler_after_callback (mdit_ruler *r,
+                                            mdit_str after_name,
+                                            mdit_str rule_name,
+                                            mdit_rule_fn fn, void *user,
+                                            mdit_rule_options opts);
+mdit_rule_status mdit_ruler_at_callback    (mdit_ruler *r,
+                                            mdit_str rule_name,
+                                            mdit_rule_fn fn, void *user,
+                                            mdit_rule_options opts);
+
+/* ---------------------------------------------------------------------
  * Lookup / iteration
  *
- * ``get_rules`` returns a contiguous array of (fn, user) pairs for the
- * active rules in the requested chain. Pass ``MDIT_STR_LIT("")`` to
- * get the default chain.
+ * ``get_rules`` returns a contiguous array of (fn, user) tuples (plus
+ * the ``is_callback`` discriminator) for the active rules in the
+ * requested chain. Pass ``MDIT_STR_LIT("")`` to get the default chain.
  * ------------------------------------------------------------------- */
 typedef struct mdit_rule_entry {
     mdit_rule_fn  fn;
     void         *user;
+    /* True when the rule was registered with a ``_callback`` variant —
+     * dispatcher must call the generic ``bool(state, user)`` signature.
+     * False (the default) means dispatcher casts to the chain-typed
+     * signature and ignores ``user``. */
+    bool          is_callback;
 } mdit_rule_entry;
 
 const mdit_rule_entry *mdit_ruler_get_rules(mdit_ruler *r,
