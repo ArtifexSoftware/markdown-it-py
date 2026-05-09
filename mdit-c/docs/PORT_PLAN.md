@@ -47,19 +47,22 @@ The C port then has a deterministic, byte-for-byte target.
 
 ## 2. Phases
 
-### Phase 0 — discovery & harness *(in progress)*
+### Phase 0 — discovery & harness
 
 - [x] Project skeleton: `CMakeLists.txt`, `include/mdit/mdit.h`,
       directory tree, `.gitignore`, README, this plan doc.
-- [ ] `scripts/regex_inventory.py` → `docs/regex-inventory.md` cataloguing
+- [x] `scripts/regex_inventory.py` → `docs/regex-inventory.md` cataloguing
       every `re.compile`/`re.match`/`re.search`/`re.sub` site, with
       pattern, flags, and feature breakdown (anchors, char classes,
       Unicode props, lookarounds, backrefs, named groups).
-- [ ] `scripts/token_oracle.py` → `tests/oracle/*.jsonl` covering the
-      whole test corpus.
-- [ ] CI matrix (Linux/macOS/Windows × GCC/Clang/MSVC) running
-      `cmake -S . -B build` as a configure-only smoke build, plus an
-      ASan/UBSan job for when source lands.
+- [x] `scripts/token_oracle.py` → `tests/oracle/*.jsonl` covering the
+      whole test corpus (20 sources today: CommonMark spec + spec doc,
+      `tests/test_port` fixtures, GFM tables/strikethrough/tasklists/
+      alerts, smartquotes/typographer/linkify, normalize/proto/xss).
+- [x] CI matrix (Linux/macOS/Windows × GCC/Clang/MSVC) — the
+      `cmake-configure` job in `.github/workflows/mdit-c.yml` covers
+      every supported toolchain, and the `oracle` / `sanitizers` /
+      `c-fuzzers` jobs hang the rest of the harness off it.
 
 ### Phase 1 — foundations
 
@@ -131,9 +134,11 @@ Order chosen so each layer can be unit-tested in isolation.
       logic. `mdit_renderer_add_rule` lets plugins override or extend.
       14 tests including custom-rule replacement, attr escaping, and
       every default rule.
-- [ ] `common/normalize_url` (`normalizeLink` / `normalizeLinkText` /
-      `validateLink`) — defers to Phase 2 since it composes url +
+- [x] `common/normalize_url` (`normalizeLink` / `normalizeLinkText` /
+      `validateLink`) — landed alongside Phase 2 since it composes url +
       escape and is consumed exclusively by `MarkdownIt.normalizeLink`.
+      Lives in `src/normalize_url.{c,h}` and is exercised through the
+      `link` / `image` / `autolink` / `reference` rules.
 
 **Exit criterion (MET):** all 12 ctest suites pass under MSVC `/W4 /WX`;
 the JSON dump of hand-crafted token streams byte-matches Python (9
@@ -141,7 +146,7 @@ shapes in `tests/token_vectors.h`); URL parse / format / encode /
 decode byte-match `mdurl` for 28 + ~20 + ~10 cases; every Phase 1
 foundation has cross-checked unit-test coverage.
 
-### Phase 2 — core + block parser *(in progress)*
+### Phase 2 — core + block parser
 
 Implement enough to run blocks against the oracle.
 
@@ -242,10 +247,11 @@ ending the line). `table` does GFM cell splitting (with `\|` escapes),
 divider validation against `^:?-+:?$`, alignment styles, autocomplete
 of short rows, and termination via the `blockquote` alt chain.
 
-**Phase 2 status:** all eleven block rules and the four core rules
-(`normalize`, `block`, `inline`, `text_join`) are now ported. The
-remaining work is in Phase 3 (inline rules) and Phase 4 (renderer +
-remaining core rules).
+**Phase 2 status:** complete. All eleven block rules and the four
+core rules (`normalize`, `block`, `inline`, `text_join`) are
+ported, byte-identical to upstream over the pinned 540-case block
+oracle. Inline-rule work tracks in Phase 3; renderer parity in
+Phase 4.
 
 ### Phase 3 — inline parser
 
@@ -310,6 +316,13 @@ emphasis post-processing (`em` / `strong` token rewriting), and
 Sweep filter loosened by `*` and `_`; corpus grew from 188 → 338 spec
 cases.
 
+**Phase 3 status:** complete. All inline rules listed above are
+ported (`autolink` / `html_inline` / `link` / `image` / `linkify`
+landed alongside slice 3b); the full CommonMark spec passes via
+`mdit_render` and the CPython binding's `python_pytest` job runs
+the upstream spec corpus + `tests/test_port` fixtures byte-for-byte
+(904 items green on Windows + Python 3.12).
+
 **Exit criterion:** full CommonMark spec passes via `mdit_render`.
 
 ### Phase 4 — remaining core rules + renderer parity
@@ -320,10 +333,20 @@ cases.
   custom render rules.
 - Optional `SyntaxTreeNode` convenience layer.
 
+**Phase 4 status:** complete. The five core rules are ported
+(`replacements` and `smartquotes` driven by the `typographer` and
+`smartquotes` options respectively, with the four-codepoint quote
+table accepted as either a string or sequence). `RendererHTML` parity
+covers `xhtmlOut`, `breaks`, `langPrefix`, and Python-side custom
+render rules through `md.add_render_rule(...)`. The `SyntaxTreeNode`
+convenience layer ships in the CPython binding as
+`mdit_c.tree.SyntaxTreeNode` (Phase 5 slice 6) with the upstream
+`tests/test_tree.py` regressions as part of `python_pytest`.
+
 **Exit criterion:** all CommonMark spec tests + all `tests/test_port`
 cases produce identical HTML to Python.
 
-### Phase 5 — bindings, CLI, packaging *(in progress)*
+### Phase 5 — bindings, CLI, packaging
 
 - [x] **`cli/md_cli`** — `markdown-it-c` command-line driver. Mirrors
       `markdown_it/cli/parse.py`'s batch + `--stdin` modes (interactive
@@ -338,7 +361,7 @@ cases produce identical HTML to Python.
       and `md_cli_python_parity` (a Python-driven byte-equality sweep
       against the upstream CLI; auto-skips if `markdown_it` isn't
       importable in the test interpreter).
-- [~] **CPython extension** (`mdit-c/bindings/python/`) — slices 1–6
+- [x] **CPython extension** (`mdit-c/bindings/python/`) — slices 1–8
       shipped. `MDIT_BUILD_PYBIND=ON` builds an internal `_mdit_c`
       module via CMake's `Python3_add_library(... WITH_SOABI ...)` and
       stages it next to a small pure-Python `mdit_c` package wrapper.
