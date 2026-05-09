@@ -454,9 +454,27 @@ cases produce identical HTML to Python.
       callback smoke cases (core/block/inline before/after/at through
       `md.use`) and adds checks for inline2, state invalidation after a
       rule returns, enable/disable on plugin rules, and registration
-      error paths. Follow-up scope remains richer state mutation
-      (`state.tokens`, token push helpers, env object identity inside
-      callbacks, alt-chain options, and `inline.add_terminator_char`).
+      error paths.
+      Slice 8 closes out the plugin-surface gaps: (1) every state
+      wrapper exposes `state.tokens` as a live list of `Token`
+      instances — reads materialise lazily from the C
+      `mdit_vec_token` (or the inline parent's children array) and
+      mutations (`append`, in-place edits, `state.tokens = [...]`)
+      are folded back into the C engine when the rule returns, with
+      strings/attrs/meta/children duplicated into the parser's
+      arena; (2) the user-supplied `env` argument from
+      `parse`/`render` is forwarded as `state.env` on every callback
+      (it threads through a new `mdit_env.user` slot the C engine
+      ignores); (3) `ruler.before/after/at/push` accepts
+      `options={"alt": [...]}` to register rules under alt-chain
+      tags (already supported by the C `mdit_ruler`, now plumbed
+      through `_ruler_install`); (4) `MarkdownIt.inline.
+      add_terminator_char(ch)` registers a single ASCII character
+      that stops the inline `text` rule, mirroring upstream's
+      `ParserInline.add_terminator_char`. New `test_plugin_creation`
+      cases exercise env identity, `state.tokens` round-trips for
+      core/block/inline rules, alt-chain options, and the upstream
+      `test_add_terminator_char` scenario byte-for-byte.
 - [x] **CMake install rules + package config + pkg-config**. Toggled by
       `MDIT_INSTALL` (default ON). Installs `mdit_static` (renamed
       `libmdit.{a,lib}`) under `CMAKE_INSTALL_LIBDIR`, the curated

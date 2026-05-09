@@ -56,7 +56,9 @@
 #include "env.h"
 #include "linkifier.h"
 #include "main.h"
+#include "parser_inline.h"
 #include "ruler.h"
+#include "state.h"
 #include "str.h"
 #include "token.h"
 
@@ -1631,6 +1633,11 @@ static PyObject *do_render(PyMarkdownIt *self, PyObject *args,
     mdit_str src = { s, (size_t)n };
     mdit_env c_env;
     mdit_env_init(&c_env, self->md.arena);
+    /* Stash the user-supplied Python env so rule callbacks installed
+     * via ``ruler.before/after/at/push`` see the same object the
+     * caller passed in (instead of ``None``). The C engine doesn't
+     * read this slot. */
+    c_env.user = (env_obj == Py_None) ? NULL : env_obj;
     mdit_vec_token tokens;
     mdit_vec_token_init(&tokens, self->md.arena);
     bool parsed = inline_mode
@@ -1710,6 +1717,9 @@ static PyObject *do_parse(PyMarkdownIt *self, PyObject *args,
 
     mdit_env c_env;
     mdit_env_init(&c_env, self->md.arena);
+    /* See do_render: stash the Python env object so rule callbacks
+     * installed via the ruler see it instead of ``None``. */
+    c_env.user = (env_obj == Py_None) ? NULL : env_obj;
     mdit_vec_token tokens;
     mdit_vec_token_init(&tokens, &self->arena);
     mdit_str src = { s, (size_t)n };
@@ -2060,6 +2070,11 @@ typedef struct {
     PyMarkdownIt *md;           /* borrowed                             */
     PyObject     *env;          /* borrowed; same Python obj caller    */
                                 /* passed to parse()                    */
+    /* Lazily-materialised mirror of ``cstate->tokens``. NULL means
+     * the rule never touched ``state.tokens``; non-NULL means we own
+     * a strong ref and the bridge will fold the list back into
+     * ``cstate->tokens`` after the rule returns. */
+    PyObject     *tokens_cache;
 } PyStateCore;
 
 typedef struct {
@@ -2067,6 +2082,7 @@ typedef struct {
     void         *cstate;       /* mdit_state_block * */
     PyMarkdownIt *md;
     PyObject     *env;
+    PyObject     *tokens_cache;
 } PyStateBlock;
 
 typedef struct {
@@ -2074,6 +2090,7 @@ typedef struct {
     void         *cstate;       /* mdit_state_inline * */
     PyMarkdownIt *md;
     PyObject     *env;
+    PyObject     *tokens_cache;
 } PyStateInline;
 
 static PyTypeObject PyStateCore_Type;
@@ -2133,21 +2150,32 @@ static PyObject *PyStateCore_get_inlineMode(PyStateCore *self, void *closure)
     return PyBool_FromLong(s->inlineMode ? 1 : 0);
 }
 
+static PyObject *PyStateCore_get_tokens(PyStateCore *self, void *c);
+static int PyStateCore_set_tokens(PyStateCore *self, PyObject *v, void *c);
+
 static PyGetSetDef PyStateCore_getsetters[] = {
     { "src", (getter)PyStateCore_get_src, NULL, "Markdown source.", NULL },
     { "md", (getter)PyStateCore_get_md, NULL, "MarkdownIt instance.", NULL },
     { "env", (getter)PyStateCore_get_env, NULL, "User env mapping.", NULL },
     { "inlineMode", (getter)PyStateCore_get_inlineMode, NULL,
       "True if running under parseInline / renderInline.", NULL },
+    { "tokens", (getter)PyStateCore_get_tokens,
+                (setter)PyStateCore_set_tokens,
+      "Document token stream as a list of Token instances. Mutations "
+      "are folded back into the C engine when the rule returns.", NULL },
     { NULL }
 };
+
+static void py_state_core_dealloc(PyStateCore *self);
 
 static PyTypeObject PyStateCore_Type = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name      = "_mdit_c.StateCore",
     .tp_basicsize = sizeof(PyStateCore),
     .tp_flags     = Py_TPFLAGS_DEFAULT,
-    .tp_doc       = "Read-only view onto a live ``mdit_state_core``.",
+    .tp_doc       = "View onto a live ``mdit_state_core`` (read-only "
+                    "scalars; ``tokens`` is read/write with writeback).",
+    .tp_dealloc   = (destructor)py_state_core_dealloc,
     .tp_getset    = PyStateCore_getsetters,
 };
 
@@ -2210,6 +2238,9 @@ static PyObject *PyStateBlock_get_parentType(PyStateBlock *self, void *closure)
         (Py_ssize_t)s->parent_type.len, "strict");
 }
 
+static PyObject *PyStateBlock_get_tokens(PyStateBlock *self, void *c);
+static int PyStateBlock_set_tokens(PyStateBlock *self, PyObject *v, void *c);
+
 static PyGetSetDef PyStateBlock_getsetters[] = {
     { "src", (getter)PyStateBlock_get_src, NULL, "Markdown source.", NULL },
     { "md", (getter)PyStateBlock_get_md, NULL, "MarkdownIt instance.", NULL },
@@ -2230,15 +2261,23 @@ static PyGetSetDef PyStateBlock_getsetters[] = {
       "True for tight lists.", NULL },
     { "parentType", (getter)PyStateBlock_get_parentType, NULL,
       "Parent token type ('root', 'paragraph', 'blockquote', ...).", NULL },
+    { "tokens", (getter)PyStateBlock_get_tokens,
+                (setter)PyStateBlock_set_tokens,
+      "Block token stream as a list of Token instances. Mutations "
+      "are folded back into the C engine when the rule returns.", NULL },
     { NULL }
 };
+
+static void py_state_block_dealloc(PyStateBlock *self);
 
 static PyTypeObject PyStateBlock_Type = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name      = "_mdit_c.StateBlock",
     .tp_basicsize = sizeof(PyStateBlock),
     .tp_flags     = Py_TPFLAGS_DEFAULT,
-    .tp_doc       = "Read-only view onto a live ``mdit_state_block``.",
+    .tp_doc       = "View onto a live ``mdit_state_block`` (read-only "
+                    "scalars; ``tokens`` is read/write with writeback).",
+    .tp_dealloc   = (destructor)py_state_block_dealloc,
     .tp_getset    = PyStateBlock_getsetters,
 };
 
@@ -2336,6 +2375,9 @@ static PyObject *PyStateInline_get_linkLevel(PyStateInline *self,
     return PyLong_FromLong((long)s->link_level);
 }
 
+static PyObject *PyStateInline_get_tokens(PyStateInline *self, void *c);
+static int PyStateInline_set_tokens(PyStateInline *self, PyObject *v, void *c);
+
 static PyGetSetDef PyStateInline_getsetters[] = {
     { "src", (getter)PyStateInline_get_src, NULL, "Markdown source.", NULL },
     { "md", (getter)PyStateInline_get_md, NULL, "MarkdownIt instance.", NULL },
@@ -2352,17 +2394,495 @@ static PyGetSetDef PyStateInline_getsetters[] = {
       "Pending (unflushed) text accumulator.", NULL },
     { "linkLevel", (getter)PyStateInline_get_linkLevel, NULL,
       "Suppression counter for inline linkify (0 means active).", NULL },
+    { "tokens", (getter)PyStateInline_get_tokens,
+                (setter)PyStateInline_set_tokens,
+      "Children of the inline parent token, as a list of Token "
+      "instances. Mutations are folded back into the parent's child "
+      "array when the rule returns.", NULL },
     { NULL }
 };
+
+static void py_state_inline_dealloc(PyStateInline *self);
 
 static PyTypeObject PyStateInline_Type = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name      = "_mdit_c.StateInline",
     .tp_basicsize = sizeof(PyStateInline),
     .tp_flags     = Py_TPFLAGS_DEFAULT,
-    .tp_doc       = "Read/write view onto a live ``mdit_state_inline``.",
+    .tp_doc       = "View onto a live ``mdit_state_inline`` (``pos`` "
+                    "and ``tokens`` are writable; other scalars are "
+                    "read-only).",
+    .tp_dealloc   = (destructor)py_state_inline_dealloc,
     .tp_getset    = PyStateInline_getsetters,
 };
+
+/* ------------------------------------------------------------------ */
+/* state.tokens materialisation + writeback                            */
+/*                                                                    */
+/* Plugins commonly do                                                 */
+/*                                                                    */
+/*     def my_rule(state):                                             */
+/*         out = []                                                    */
+/*         for tok in state.tokens:                                    */
+/*             if tok.type == "image":                                 */
+/*                 out.append(my_token(...))                           */
+/*             else:                                                   */
+/*                 out.append(tok)                                     */
+/*         state.tokens = out                                          */
+/*                                                                    */
+/* so we expose ``state.tokens`` as a list of ``Token`` instances.    */
+/* Reads materialise the list lazily from the C vec/children array;   */
+/* the bridge folds the (possibly mutated) list back into the C       */
+/* engine after the rule returns. Plugins that never touch            */
+/* ``tokens`` pay zero overhead for it.                                */
+/* ------------------------------------------------------------------ */
+
+static int py_token_apply_to_mdit(PyObject *src, mdit_arena *arena,
+                                  mdit_token *dst);
+
+/* Duplicate ``s`` into ``arena`` and return the new view. */
+static mdit_str arena_dup_mdit_str(mdit_arena *arena, mdit_str s)
+{
+    mdit_str out = { NULL, 0 };
+    if (s.len == 0) {
+        out.data = "";
+        return out;
+    }
+    char *buf = (char *)mdit_arena_alloc_aligned(arena, s.len, 1);
+    if (buf == NULL) return out;
+    memcpy(buf, s.data, s.len);
+    out.data = buf;
+    out.len  = s.len;
+    return out;
+}
+
+/* PyUnicode -> arena-allocated mdit_str. Returns -1 (with a Python
+ * exception set) on failure; 0 otherwise. */
+static int py_unicode_to_arena_str(PyObject *obj, mdit_arena *arena,
+                                   mdit_str *out)
+{
+    if (obj == NULL || obj == Py_None) {
+        out->data = "";
+        out->len  = 0;
+        return 0;
+    }
+    if (!PyUnicode_Check(obj)) {
+        PyErr_Format(PyExc_TypeError,
+            "expected str, got %s", Py_TYPE(obj)->tp_name);
+        return -1;
+    }
+    Py_ssize_t n = 0;
+    const char *bytes = PyUnicode_AsUTF8AndSize(obj, &n);
+    if (bytes == NULL) return -1;
+    if (n == 0) { out->data = ""; out->len = 0; return 0; }
+    char *buf = (char *)mdit_arena_alloc_aligned(arena, (size_t)n, 1);
+    if (buf == NULL) { PyErr_NoMemory(); return -1; }
+    memcpy(buf, bytes, (size_t)n);
+    out->data = buf;
+    out->len  = (size_t)n;
+    return 0;
+}
+
+/* Python value (str/int/float/bool/None) -> ``mdit_value``. The string
+ * variant arena-duplicates so the value outlives the Python object. */
+static int py_value_to_mdit(PyObject *obj, mdit_arena *arena,
+                            mdit_value *out)
+{
+    if (obj == NULL || obj == Py_None) {
+        *out = mdit_value_null();
+        return 0;
+    }
+    if (PyBool_Check(obj)) {
+        *out = mdit_value_bool(obj == Py_True);
+        return 0;
+    }
+    if (PyLong_Check(obj)) {
+        long long v = PyLong_AsLongLong(obj);
+        if (v == -1 && PyErr_Occurred()) return -1;
+        *out = mdit_value_int((int64_t)v);
+        return 0;
+    }
+    if (PyFloat_Check(obj)) {
+        *out = mdit_value_double(PyFloat_AsDouble(obj));
+        return 0;
+    }
+    if (PyUnicode_Check(obj)) {
+        mdit_str s;
+        if (py_unicode_to_arena_str(obj, arena, &s) < 0) return -1;
+        *out = mdit_value_str(s);
+        return 0;
+    }
+    PyErr_Format(PyExc_TypeError,
+        "unsupported attr/meta value type: %s", Py_TYPE(obj)->tp_name);
+    return -1;
+}
+
+/* PyDict -> mdit_map (in-place; caller has already cleared/initialised). */
+static int py_dict_to_mdit_map(PyObject *dict, mdit_arena *arena,
+                               mdit_map *dst)
+{
+    if (dict == NULL || dict == Py_None) return 0;
+    if (!PyDict_Check(dict)) {
+        PyErr_Format(PyExc_TypeError,
+            "expected dict, got %s", Py_TYPE(dict)->tp_name);
+        return -1;
+    }
+    Py_ssize_t pos = 0;
+    PyObject *key = NULL;
+    PyObject *value = NULL;
+    while (PyDict_Next(dict, &pos, &key, &value)) {
+        mdit_str k;
+        if (py_unicode_to_arena_str(key, arena, &k) < 0) return -1;
+        mdit_value v;
+        if (py_value_to_mdit(value, arena, &v) < 0) return -1;
+        if (!mdit_map_set(dst, k, v)) {
+            PyErr_NoMemory();
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* Replace ``dst->children`` with the contents of the Python list. */
+static int py_list_to_child_array(PyObject *list, mdit_arena *arena,
+                                  mdit_token **out_arr,
+                                  size_t *out_len, size_t *out_cap)
+{
+    *out_arr = NULL;
+    *out_len = 0;
+    *out_cap = 0;
+    if (list == NULL || list == Py_None) return 0;
+    if (!PySequence_Check(list)) {
+        PyErr_SetString(PyExc_TypeError,
+            "Token.children must be None or a sequence of Tokens");
+        return -1;
+    }
+    Py_ssize_t n = PyObject_Length(list);
+    if (n < 0) return -1;
+    if (n == 0) {
+        /* Allocate a 1-byte sentinel so callers can distinguish */
+        /* "explicit empty children" from "None". The vector code in */
+        /* token.c uses (children != NULL && len == 0) for the */
+        /* `[]` case (mdit_token_set_children_empty does the same). */
+        char *sentinel = (char *)mdit_arena_alloc_aligned(arena, 1, 1);
+        if (sentinel == NULL) { PyErr_NoMemory(); return -1; }
+        *out_arr = (mdit_token *)sentinel;
+        return 0;
+    }
+    mdit_token *arr = (mdit_token *)mdit_arena_alloc_aligned(
+        arena, (size_t)n * sizeof(mdit_token), _Alignof(mdit_token));
+    if (arr == NULL) { PyErr_NoMemory(); return -1; }
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        PyObject *item = PySequence_GetItem(list, i);
+        if (item == NULL) return -1;
+        memset(&arr[i], 0, sizeof(mdit_token));
+        mdit_token_init(&arr[i], arena, MDIT_STR_LIT(""), MDIT_STR_LIT(""), 0);
+        int rc = py_token_apply_to_mdit(item, arena, &arr[i]);
+        Py_DECREF(item);
+        if (rc < 0) return -1;
+    }
+    *out_arr = arr;
+    *out_len = (size_t)n;
+    *out_cap = (size_t)n;
+    return 0;
+}
+
+/* Apply ``src`` (PyToken or anything quacking like one) onto ``dst``,
+ * which has been freshly initialised. Allocates strings/maps/children
+ * into ``arena``. Returns -1 with a Python exception on failure. */
+static int py_token_apply_to_mdit(PyObject *src, mdit_arena *arena,
+                                  mdit_token *dst)
+{
+    if (src == NULL) {
+        PyErr_SetString(PyExc_TypeError, "expected Token, got NULL");
+        return -1;
+    }
+    /* We don't strictly require the PyToken type — duck typing makes
+     * fixture-style stand-ins easier — but we DO require attribute
+     * access for the standard fields. */
+    PyObject *tmp;
+
+#define GET_OPT(NAME) ((tmp = PyObject_GetAttrString(src, NAME)) ? tmp : NULL)
+#define CHECK(rc) do { if ((rc) < 0) goto fail; } while (0)
+
+    PyObject *type     = GET_OPT("type");
+    PyObject *tag      = GET_OPT("tag");
+    PyObject *nesting  = GET_OPT("nesting");
+    PyObject *attrs    = GET_OPT("attrs");
+    PyObject *map_obj  = GET_OPT("map");
+    PyObject *level    = GET_OPT("level");
+    PyObject *children = GET_OPT("children");
+    PyObject *content  = GET_OPT("content");
+    PyObject *markup   = GET_OPT("markup");
+    PyObject *info     = GET_OPT("info");
+    PyObject *meta     = GET_OPT("meta");
+    PyObject *block    = GET_OPT("block");
+    PyObject *hidden   = GET_OPT("hidden");
+    if (PyErr_Occurred()) goto fail;
+
+    mdit_str s;
+    if (type    != NULL) { CHECK(py_unicode_to_arena_str(type,    arena, &s)); dst->type    = s; }
+    if (tag     != NULL) { CHECK(py_unicode_to_arena_str(tag,     arena, &s)); dst->tag     = s; }
+    if (content != NULL) { CHECK(py_unicode_to_arena_str(content, arena, &s)); dst->content = s; }
+    if (markup  != NULL) { CHECK(py_unicode_to_arena_str(markup,  arena, &s)); dst->markup  = s; }
+    if (info    != NULL) { CHECK(py_unicode_to_arena_str(info,    arena, &s)); dst->info    = s; }
+
+    if (nesting != NULL) {
+        long v = PyLong_AsLong(nesting);
+        if (v == -1 && PyErr_Occurred()) goto fail;
+        if (v < -1 || v > 1) {
+            PyErr_SetString(PyExc_ValueError,
+                "Token.nesting must be in {-1, 0, 1}");
+            goto fail;
+        }
+        dst->nesting = (int8_t)v;
+    }
+    if (level != NULL) {
+        long v = PyLong_AsLong(level);
+        if (v == -1 && PyErr_Occurred()) goto fail;
+        dst->level = (int32_t)v;
+    }
+    if (block  != NULL) dst->block  = PyObject_IsTrue(block)  == 1;
+    if (hidden != NULL) dst->hidden = PyObject_IsTrue(hidden) == 1;
+
+    if (map_obj == NULL || map_obj == Py_None) {
+        dst->has_map = false;
+    } else {
+        if (!PySequence_Check(map_obj) || PyObject_Length(map_obj) != 2) {
+            PyErr_SetString(PyExc_TypeError,
+                "Token.map must be None or a 2-element sequence");
+            goto fail;
+        }
+        PyObject *a = PySequence_GetItem(map_obj, 0);
+        PyObject *b = PySequence_GetItem(map_obj, 1);
+        if (a == NULL || b == NULL) {
+            Py_XDECREF(a); Py_XDECREF(b); goto fail;
+        }
+        long ai = PyLong_AsLong(a);
+        long bi = PyLong_AsLong(b);
+        Py_DECREF(a); Py_DECREF(b);
+        if ((ai == -1 || bi == -1) && PyErr_Occurred()) goto fail;
+        dst->has_map = true;
+        dst->map.begin = (int32_t)ai;
+        dst->map.end   = (int32_t)bi;
+    }
+
+    /* attrs / meta — clear (mdit_token_init seeded an empty map) and
+     * refill from the Python dicts. */
+    if (attrs != NULL) {
+        mdit_map_clear(&dst->attrs);
+        CHECK(py_dict_to_mdit_map(attrs, arena, &dst->attrs));
+    }
+    if (meta != NULL) {
+        mdit_map_clear(&dst->meta);
+        CHECK(py_dict_to_mdit_map(meta, arena, &dst->meta));
+    }
+
+    /* children — None | sequence of Tokens. Always rebuild from the
+     * Python view so deletions/replacements propagate. */
+    {
+        mdit_token *child_arr;
+        size_t child_len, child_cap;
+        CHECK(py_list_to_child_array(children, arena,
+                                     &child_arr, &child_len, &child_cap));
+        dst->children     = child_arr;
+        dst->children_len = child_len;
+        dst->children_cap = child_cap;
+    }
+
+#undef GET_OPT
+#undef CHECK
+
+    Py_XDECREF(type); Py_XDECREF(tag); Py_XDECREF(nesting);
+    Py_XDECREF(attrs); Py_XDECREF(map_obj); Py_XDECREF(level);
+    Py_XDECREF(children); Py_XDECREF(content); Py_XDECREF(markup);
+    Py_XDECREF(info); Py_XDECREF(meta); Py_XDECREF(block); Py_XDECREF(hidden);
+    return 0;
+
+fail:
+    Py_XDECREF(type); Py_XDECREF(tag); Py_XDECREF(nesting);
+    Py_XDECREF(attrs); Py_XDECREF(map_obj); Py_XDECREF(level);
+    Py_XDECREF(children); Py_XDECREF(content); Py_XDECREF(markup);
+    Py_XDECREF(info); Py_XDECREF(meta); Py_XDECREF(block); Py_XDECREF(hidden);
+    return -1;
+}
+
+/* Materialise an mdit_vec_token as a Python list of Tokens. */
+static PyObject *vec_to_py_list(const mdit_vec_token *v)
+{
+    if (v == NULL) return PyList_New(0);
+    PyObject *list = PyList_New((Py_ssize_t)v->len);
+    if (list == NULL) return NULL;
+    for (size_t i = 0; i < v->len; ++i) {
+        PyObject *tok = PyToken_from_mdit(&v->data[i]);
+        if (tok == NULL) { Py_DECREF(list); return NULL; }
+        PyList_SET_ITEM(list, (Py_ssize_t)i, tok);
+    }
+    return list;
+}
+
+/* Materialise a token's children (NULL means an empty list). */
+static PyObject *children_to_py_list(const mdit_token *parent)
+{
+    if (parent == NULL || parent->children == NULL || parent->children_len == 0) {
+        return PyList_New(0);
+    }
+    PyObject *list = PyList_New((Py_ssize_t)parent->children_len);
+    if (list == NULL) return NULL;
+    for (size_t i = 0; i < parent->children_len; ++i) {
+        PyObject *tok = PyToken_from_mdit(&parent->children[i]);
+        if (tok == NULL) { Py_DECREF(list); return NULL; }
+        PyList_SET_ITEM(list, (Py_ssize_t)i, tok);
+    }
+    return list;
+}
+
+/* Replace ``dst``'s contents with the Tokens in ``list``. */
+static int py_list_to_vec(PyObject *list, mdit_arena *arena,
+                          mdit_vec_token *dst)
+{
+    if (list == NULL || !PyList_Check(list)) {
+        PyErr_SetString(PyExc_TypeError, "state.tokens must be a list");
+        return -1;
+    }
+    mdit_vec_token_clear(dst);
+    Py_ssize_t n = PyList_GET_SIZE(list);
+    if (n > 0 && !mdit_vec_token_reserve(dst, (size_t)n)) {
+        PyErr_NoMemory();
+        return -1;
+    }
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        PyObject *item = PyList_GET_ITEM(list, i);
+        mdit_token *slot = mdit_vec_token_emplace(dst);
+        if (slot == NULL) { PyErr_NoMemory(); return -1; }
+        memset(slot, 0, sizeof(*slot));
+        mdit_token_init(slot, arena, MDIT_STR_LIT(""), MDIT_STR_LIT(""), 0);
+        if (py_token_apply_to_mdit(item, arena, slot) < 0) return -1;
+    }
+    return 0;
+}
+
+/* Replace ``parent->children`` with the Tokens in ``list``. */
+static int py_list_to_token_children(PyObject *list, mdit_arena *arena,
+                                     mdit_token *parent)
+{
+    if (list == NULL || !PyList_Check(list)) {
+        PyErr_SetString(PyExc_TypeError, "state.tokens must be a list");
+        return -1;
+    }
+    mdit_token *child_arr;
+    size_t child_len, child_cap;
+    if (py_list_to_child_array(list, arena, &child_arr,
+                               &child_len, &child_cap) < 0) {
+        return -1;
+    }
+    parent->children     = child_arr;
+    parent->children_len = child_len;
+    parent->children_cap = child_cap;
+    return 0;
+}
+
+/* state.tokens getters — materialise lazily and cache. */
+static PyObject *PyStateCore_get_tokens(PyStateCore *self, void *c)
+{
+    (void)c;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    if (self->tokens_cache == NULL) {
+        mdit_state_core *s = (mdit_state_core *)self->cstate;
+        self->tokens_cache = vec_to_py_list(s->tokens);
+        if (self->tokens_cache == NULL) return NULL;
+    }
+    Py_INCREF(self->tokens_cache);
+    return self->tokens_cache;
+}
+static PyObject *PyStateBlock_get_tokens(PyStateBlock *self, void *c)
+{
+    (void)c;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    if (self->tokens_cache == NULL) {
+        mdit_state_block *s = (mdit_state_block *)self->cstate;
+        self->tokens_cache = vec_to_py_list(s->tokens);
+        if (self->tokens_cache == NULL) return NULL;
+    }
+    Py_INCREF(self->tokens_cache);
+    return self->tokens_cache;
+}
+static PyObject *PyStateInline_get_tokens(PyStateInline *self, void *c)
+{
+    (void)c;
+    if (state_check_alive(self->cstate) < 0) return NULL;
+    if (self->tokens_cache == NULL) {
+        mdit_state_inline *s = (mdit_state_inline *)self->cstate;
+        self->tokens_cache = children_to_py_list(s->parent);
+        if (self->tokens_cache == NULL) return NULL;
+    }
+    Py_INCREF(self->tokens_cache);
+    return self->tokens_cache;
+}
+
+/* state.tokens setters — accept any list and replace the cache; the
+ * actual write into the C engine happens in the bridge after the rule
+ * returns. */
+static int py_state_set_tokens(PyObject **slot, PyObject *value)
+{
+    if (value == NULL) {
+        PyErr_SetString(PyExc_AttributeError, "cannot delete tokens");
+        return -1;
+    }
+    if (!PyList_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "state.tokens must be a list");
+        return -1;
+    }
+    Py_INCREF(value);
+    Py_XSETREF(*slot, value);
+    return 0;
+}
+static int PyStateCore_set_tokens(PyStateCore *self, PyObject *v, void *c)
+{
+    (void)c;
+    if (state_check_alive(self->cstate) < 0) return -1;
+    return py_state_set_tokens(&self->tokens_cache, v);
+}
+static int PyStateBlock_set_tokens(PyStateBlock *self, PyObject *v, void *c)
+{
+    (void)c;
+    if (state_check_alive(self->cstate) < 0) return -1;
+    return py_state_set_tokens(&self->tokens_cache, v);
+}
+static int PyStateInline_set_tokens(PyStateInline *self, PyObject *v, void *c)
+{
+    (void)c;
+    if (state_check_alive(self->cstate) < 0) return -1;
+    return py_state_set_tokens(&self->tokens_cache, v);
+}
+
+/* Apply the cached list back to the C engine. Called by every bridge
+ * after the rule callback returns (and BEFORE invalidation, while the
+ * cstate pointer is still live). Returns 0 on success / -1 on error
+ * with a Python exception set. */
+static int py_state_writeback_tokens(PyObject *st)
+{
+    if (Py_TYPE(st) == &PyStateCore_Type) {
+        PyStateCore *s = (PyStateCore *)st;
+        if (s->tokens_cache == NULL || s->cstate == NULL) return 0;
+        mdit_state_core *cs = (mdit_state_core *)s->cstate;
+        return py_list_to_vec(s->tokens_cache, cs->arena, cs->tokens);
+    }
+    if (Py_TYPE(st) == &PyStateBlock_Type) {
+        PyStateBlock *s = (PyStateBlock *)st;
+        if (s->tokens_cache == NULL || s->cstate == NULL) return 0;
+        mdit_state_block *cs = (mdit_state_block *)s->cstate;
+        return py_list_to_vec(s->tokens_cache, cs->arena, cs->tokens);
+    }
+    if (Py_TYPE(st) == &PyStateInline_Type) {
+        PyStateInline *s = (PyStateInline *)st;
+        if (s->tokens_cache == NULL || s->cstate == NULL) return 0;
+        mdit_state_inline *cs = (mdit_state_inline *)s->cstate;
+        return py_list_to_token_children(s->tokens_cache, cs->arena,
+                                         cs->parent);
+    }
+    return 0;
+}
 
 /* ------------------------------------------------------------------ */
 /* Bridges                                                            */
@@ -2384,9 +2904,10 @@ static PyObject *py_state_core_new(PyMarkdownIt *md, mdit_state_core *cs,
 {
     PyStateCore *st = PyObject_New(PyStateCore, &PyStateCore_Type);
     if (st == NULL) return NULL;
-    st->cstate = cs;
-    st->md     = md;
-    st->env    = env;
+    st->cstate       = cs;
+    st->md           = md;
+    st->env          = env;
+    st->tokens_cache = NULL;
     return (PyObject *)st;
 }
 
@@ -2395,9 +2916,10 @@ static PyObject *py_state_block_new(PyMarkdownIt *md, mdit_state_block *cs,
 {
     PyStateBlock *st = PyObject_New(PyStateBlock, &PyStateBlock_Type);
     if (st == NULL) return NULL;
-    st->cstate = cs;
-    st->md     = md;
-    st->env    = env;
+    st->cstate       = cs;
+    st->md           = md;
+    st->env          = env;
+    st->tokens_cache = NULL;
     return (PyObject *)st;
 }
 
@@ -2406,35 +2928,67 @@ static PyObject *py_state_inline_new(PyMarkdownIt *md, mdit_state_inline *cs,
 {
     PyStateInline *st = PyObject_New(PyStateInline, &PyStateInline_Type);
     if (st == NULL) return NULL;
-    st->cstate = cs;
-    st->md     = md;
-    st->env    = env;
+    st->cstate       = cs;
+    st->md           = md;
+    st->env          = env;
+    st->tokens_cache = NULL;
     return (PyObject *)st;
 }
 
 static void py_state_invalidate(PyObject *st)
 {
     if (st == NULL) return;
-    /* All three state types share the cstate slot at the same offset. */
+    /* All three state types share the cstate slot at the same offset
+     * but each carries its own tokens_cache slot. */
     if (Py_TYPE(st) == &PyStateCore_Type) {
-        ((PyStateCore *)st)->cstate = NULL;
+        PyStateCore *s = (PyStateCore *)st;
+        s->cstate = NULL;
+        Py_CLEAR(s->tokens_cache);
     } else if (Py_TYPE(st) == &PyStateBlock_Type) {
-        ((PyStateBlock *)st)->cstate = NULL;
+        PyStateBlock *s = (PyStateBlock *)st;
+        s->cstate = NULL;
+        Py_CLEAR(s->tokens_cache);
     } else if (Py_TYPE(st) == &PyStateInline_Type) {
-        ((PyStateInline *)st)->cstate = NULL;
+        PyStateInline *s = (PyStateInline *)st;
+        s->cstate = NULL;
+        Py_CLEAR(s->tokens_cache);
     }
+}
+
+/* tp_dealloc — clears any held cache. Bridges normally invalidate
+ * before the last DECREF, but a defensive cleanup here keeps the
+ * type safe to instantiate independently (e.g. by tests). */
+static void py_state_core_dealloc(PyStateCore *self)
+{
+    Py_CLEAR(self->tokens_cache);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+static void py_state_block_dealloc(PyStateBlock *self)
+{
+    Py_CLEAR(self->tokens_cache);
+    Py_TYPE(self)->tp_free((PyObject *)self);
+}
+static void py_state_inline_dealloc(PyStateInline *self)
+{
+    Py_CLEAR(self->tokens_cache);
+    Py_TYPE(self)->tp_free((PyObject *)self);
 }
 
 static PyObject *py_env_for_rule(PyMarkdownIt *md, void *c_env)
 {
-    /* If the C-side env is a ``mdit_env`` we can't unpack it back to
-     * the original Python ``env_obj`` here — the bridges currently
-     * receive only ``c_env`` (an ``mdit_env *``). For now, expose
-     * ``None`` to the Python rule. The full env propagation already
-     * happens after parse via ``populate_env_from_mdit``. */
+    /* ``c_env`` is the ``mdit_env *`` the binding handed to
+     * ``mdit_md_parse``; ``do_render`` / ``do_parse`` stash the
+     * caller-supplied Python ``env`` object on its ``user`` slot so
+     * rule callbacks see the same object the user passed to
+     * ``parse`` / ``render``. ``populate_env_from_mdit`` continues to
+     * mirror parse-discovered references back into the same dict
+     * after the parse completes. */
     (void)md;
-    (void)c_env;
-    Py_RETURN_NONE;
+    if (c_env == NULL) Py_RETURN_NONE;
+    PyObject *env = (PyObject *)((mdit_env *)c_env)->user;
+    if (env == NULL) Py_RETURN_NONE;
+    Py_INCREF(env);
+    return env;
 }
 
 static bool py_core_rule_bridge(void *state, void *user)
@@ -2454,6 +3008,10 @@ static bool py_core_rule_bridge(void *state, void *user)
     }
 
     PyObject *result = PyObject_CallOneArg(entry->callback, st);
+    if (result != NULL && py_state_writeback_tokens(st) < 0) {
+        Py_DECREF(result);
+        result = NULL;
+    }
     py_state_invalidate(st);
     Py_DECREF(st);
     Py_DECREF(py_env);
@@ -2503,6 +3061,10 @@ static bool py_block_rule_bridge(void *state, void *user)
 
     PyObject *result = PyObject_Call(entry->callback, args, NULL);
     Py_DECREF(args);
+    if (result != NULL && py_state_writeback_tokens(st) < 0) {
+        Py_DECREF(result);
+        result = NULL;
+    }
     py_state_invalidate(st);
     Py_DECREF(st);
     Py_DECREF(py_env);
@@ -2556,6 +3118,10 @@ static bool py_inline_rule_bridge(void *state, void *user)
 
     PyObject *result = PyObject_Call(entry->callback, args, NULL);
     Py_DECREF(args);
+    if (result != NULL && py_state_writeback_tokens(st) < 0) {
+        Py_DECREF(result);
+        result = NULL;
+    }
     py_state_invalidate(st);
     Py_DECREF(st);
     Py_DECREF(py_env);
@@ -2586,6 +3152,10 @@ static bool py_inline2_rule_bridge(void *state, void *user)
     }
 
     PyObject *result = PyObject_CallOneArg(entry->callback, st);
+    if (result != NULL && py_state_writeback_tokens(st) < 0) {
+        Py_DECREF(result);
+        result = NULL;
+    }
     py_state_invalidate(st);
     Py_DECREF(st);
     Py_DECREF(py_env);
@@ -2651,20 +3221,66 @@ static PyRuleEntry *make_rule_entry(PyMarkdownIt *self, PyObject *callback,
     return e;
 }
 
+/* Convert a Python iterable of strings into an arena-allocated
+ * ``mdit_str`` array. Returns 0 on success and -1 with a Python
+ * exception set on failure. ``alt_obj == NULL`` / ``Py_None`` produces
+ * a NULL/0 array (no alt chains). */
+static int build_alt_chains(PyMarkdownIt *self, PyObject *alt_obj,
+                            mdit_str **out_arr, size_t *out_len)
+{
+    *out_arr = NULL;
+    *out_len = 0;
+    if (alt_obj == NULL || alt_obj == Py_None) return 0;
+    PyObject *seq = PySequence_Fast(alt_obj,
+        "rule alt option must be an iterable of strings");
+    if (seq == NULL) return -1;
+    Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
+    if (n == 0) { Py_DECREF(seq); return 0; }
+    mdit_str *arr = (mdit_str *)mdit_arena_alloc_aligned(
+        &self->arena, (size_t)n * sizeof(mdit_str), _Alignof(mdit_str));
+    if (arr == NULL) {
+        Py_DECREF(seq);
+        PyErr_NoMemory();
+        return -1;
+    }
+    for (Py_ssize_t i = 0; i < n; ++i) {
+        PyObject *item = PySequence_Fast_GET_ITEM(seq, i);
+        if (!PyUnicode_Check(item)) {
+            Py_DECREF(seq);
+            PyErr_Format(PyExc_TypeError,
+                "alt entries must be strings, got %s",
+                Py_TYPE(item)->tp_name);
+            return -1;
+        }
+        Py_ssize_t alen = 0;
+        const char *atxt = PyUnicode_AsUTF8AndSize(item, &alen);
+        if (atxt == NULL) { Py_DECREF(seq); return -1; }
+        if (arena_dup_str(self, atxt, (size_t)alen, &arr[i]) < 0) {
+            Py_DECREF(seq);
+            return -1;
+        }
+    }
+    Py_DECREF(seq);
+    *out_arr = arr;
+    *out_len = (size_t)n;
+    return 0;
+}
+
 static PyObject *PyMarkdownIt_ruler_install(PyMarkdownIt *self, PyObject *args,
                                             PyObject *kwargs)
 {
     static char *kwlist[] = {
-        "chain", "position", "name", "callback", "ref", NULL
+        "chain", "position", "name", "callback", "ref", "alt", NULL
     };
     const char *chain    = NULL;
     const char *position = NULL;
     const char *name     = NULL;
     PyObject   *callback = NULL;
     const char *ref      = NULL;
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sssO|z", kwlist,
+    PyObject   *alt_obj  = NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sssO|zO", kwlist,
                                      &chain, &position, &name, &callback,
-                                     &ref)) {
+                                     &ref, &alt_obj)) {
         return NULL;
     }
     if (!PyCallable_Check(callback)) {
@@ -2682,6 +3298,11 @@ static PyObject *PyMarkdownIt_ruler_install(PyMarkdownIt *self, PyObject *args,
         PyErr_Format(PyExc_KeyError, "unknown ruler chain: %s", chain);
         return NULL;
     }
+
+    mdit_str *alt_arr = NULL;
+    size_t    alt_len = 0;
+    if (build_alt_chains(self, alt_obj, &alt_arr, &alt_len) < 0) return NULL;
+    mdit_rule_options opts = { alt_arr, alt_len };
 
     if (rule_track_callback(self, chain, name, callback) < 0) return NULL;
 
@@ -2708,8 +3329,7 @@ static PyObject *PyMarkdownIt_ruler_install(PyMarkdownIt *self, PyObject *args,
 
     mdit_rule_status st;
     if (strcmp(position, "push") == 0) {
-        st = mdit_ruler_push_callback(r, rule_name, bridge, entry,
-                                      MDIT_RULE_OPTIONS_NONE);
+        st = mdit_ruler_push_callback(r, rule_name, bridge, entry, opts);
     } else if (strcmp(position, "before") == 0) {
         if (ref == NULL) {
             PyErr_SetString(PyExc_TypeError,
@@ -2717,7 +3337,7 @@ static PyObject *PyMarkdownIt_ruler_install(PyMarkdownIt *self, PyObject *args,
             return NULL;
         }
         st = mdit_ruler_before_callback(r, ref_name, rule_name, bridge,
-                                        entry, MDIT_RULE_OPTIONS_NONE);
+                                        entry, opts);
     } else if (strcmp(position, "after") == 0) {
         if (ref == NULL) {
             PyErr_SetString(PyExc_TypeError,
@@ -2725,10 +3345,9 @@ static PyObject *PyMarkdownIt_ruler_install(PyMarkdownIt *self, PyObject *args,
             return NULL;
         }
         st = mdit_ruler_after_callback(r, ref_name, rule_name, bridge,
-                                       entry, MDIT_RULE_OPTIONS_NONE);
+                                       entry, opts);
     } else if (strcmp(position, "at") == 0) {
-        st = mdit_ruler_at_callback(r, rule_name, bridge, entry,
-                                    MDIT_RULE_OPTIONS_NONE);
+        st = mdit_ruler_at_callback(r, rule_name, bridge, entry, opts);
     } else {
         PyErr_Format(PyExc_ValueError, "unknown position: %s", position);
         return NULL;
@@ -2744,6 +3363,28 @@ static PyObject *PyMarkdownIt_ruler_install(PyMarkdownIt *self, PyObject *args,
         }
         return NULL;
     }
+    Py_RETURN_NONE;
+}
+
+static PyObject *PyMarkdownIt_add_inline_terminator(PyMarkdownIt *self,
+                                                    PyObject *arg)
+{
+    if (!PyUnicode_Check(arg)) {
+        PyErr_SetString(PyExc_TypeError,
+            "add_terminator_char() expects a single character");
+        return NULL;
+    }
+    Py_ssize_t n = 0;
+    const char *s = PyUnicode_AsUTF8AndSize(arg, &n);
+    if (s == NULL) return NULL;
+    /* Mirrors upstream: only single ASCII characters are supported by
+     * the inline text terminator set (the C-side bitmap is 256-byte). */
+    if (n != 1 || (unsigned char)s[0] >= 0x80) {
+        PyErr_SetString(PyExc_ValueError,
+            "add_terminator_char() requires a single ASCII character");
+        return NULL;
+    }
+    mdit_parser_inline_add_terminator(&self->md.inline_p, s[0]);
     Py_RETURN_NONE;
 }
 
@@ -2890,11 +3531,19 @@ static PyMethodDef PyMarkdownIt_methods[] = {
       "_add_render_rule(name, callback) -> None." },
     { "_ruler_install", (PyCFunction)PyMarkdownIt_ruler_install,
       METH_VARARGS | METH_KEYWORDS,
-      "_ruler_install(chain, position, name, callback, ref=None) -> None.\n"
+      "_ruler_install(chain, position, name, callback, ref=None, "
+      "alt=None) -> None.\n"
       "Register a Python callable as a parser rule. ``chain`` is one of "
       "``core`` / ``block`` / ``inline`` / ``inline2``; ``position`` is "
       "``push`` / ``before`` / ``after`` / ``at``. ``ref`` is required "
-      "for ``before`` / ``after``." },
+      "for ``before`` / ``after``. ``alt`` is an optional iterable of "
+      "alt-chain tag names (mirrors upstream ``options['alt']``)." },
+    { "_add_inline_terminator",
+      (PyCFunction)PyMarkdownIt_add_inline_terminator, METH_O,
+      "_add_inline_terminator(ch) -> None: register an ASCII character "
+      "that stops the inline ``text`` rule, allowing other inline "
+      "rules to match. Mirrors upstream "
+      "``ParserInline.add_terminator_char``." },
     { NULL }
 };
 

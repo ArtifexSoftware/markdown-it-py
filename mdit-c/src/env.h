@@ -27,6 +27,11 @@ typedef struct mdit_env {
     mdit_reference *duplicate_refs;
     size_t          duplicate_refs_len;
     size_t          duplicate_refs_cap;
+    /* Opaque slot for embedders. The C engine never reads or writes it;
+     * bindings use it to thread their own context (e.g. the original
+     * Python ``env`` object) through to rule callbacks via
+     * ``state->env``. ``mdit_env_init`` zeros it. */
+    void           *user;
 } mdit_env;
 
 void mdit_env_init(mdit_env *env, mdit_arena *arena);

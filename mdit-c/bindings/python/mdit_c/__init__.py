@@ -47,16 +47,25 @@ Supported today (Phase 5, slice 7):
   ``info``, ``meta``, ``block``, ``hidden``).
 * Parser rule callbacks: ``md.core.ruler.before/after/at/push``,
   ``md.block.ruler.*``, ``md.inline.ruler.*``, ``md.inline.ruler2.*``
-  accept Python callables. Core rules receive ``state`` (a read-only
+  accept Python callables. Core rules receive ``state`` (a
   ``StateCore`` view); block rules receive ``(state, startLine,
   endLine, silent)``; inline rules receive ``(state, silent)``. State
   wrappers expose ``src``/``env``/``md`` plus a small set of
   chain-specific scalars (``inlineMode`` for core; ``line``/
   ``lineMax``/``blkIndent``/``level``/``tight``/``parentType`` for
   block; ``pos`` (writable)/``posMax``/``level``/``pendingLevel``/
-  ``pending``/``linkLevel`` for inline). Mutating ``state.tokens``
-  from a Python rule is not yet supported — see the port plan for
-  follow-up scope.
+  ``pending``/``linkLevel`` for inline). ``state.tokens`` is a live
+  read/write list of ``Token`` instances — mutations (append, replace,
+  ``state.tokens = [...]``) are folded back into the C engine when
+  the rule returns. The user-supplied ``env`` argument to ``parse``/
+  ``render`` is forwarded as ``state.env`` to every rule callback.
+* ``ruler.before/after/at/push`` accepts an ``options={"alt": [...]}``
+  dict to register a rule under one or more alt-chain tags (for
+  parsers that swap the active rule set per call site).
+* ``MarkdownIt.inline.add_terminator_char(ch)`` registers a single
+  ASCII character that stops the inline ``text`` rule, mirroring
+  upstream ``ParserInline.add_terminator_char`` so plugins with
+  non-default trigger characters fire correctly.
 """
 
 from __future__ import annotations
@@ -172,6 +181,32 @@ class Ruler:
     ) -> list[str]:
         return self._parser._ruler_enable_only(self._chain, names, ignoreInvalid)
 
+    @staticmethod
+    def _normalize_alt(options: dict[str, Any] | None) -> list[str] | None:
+        """Pluck ``alt`` from a rule-options dict, validating shape."""
+        if not options:
+            return None
+        alt = options.get("alt")
+        if alt is None:
+            unknown = set(options.keys()) - {"alt"}
+            if unknown:
+                raise ValueError(
+                    f"unsupported rule options: {sorted(unknown)!r}"
+                )
+            return None
+        unknown = set(options.keys()) - {"alt"}
+        if unknown:
+            raise ValueError(
+                f"unsupported rule options: {sorted(unknown)!r}"
+            )
+        if isinstance(alt, str) or not isinstance(alt, Iterable):
+            raise TypeError("rule option 'alt' must be an iterable of strings")
+        result = [str(item) for item in alt]
+        for item in result:
+            if not item:
+                raise ValueError("rule option 'alt' entries must be non-empty")
+        return result
+
     def before(
         self,
         beforeName: str,
@@ -179,12 +214,9 @@ class Ruler:
         fn: Callable[..., Any],
         options: dict[str, Any] | None = None,
     ) -> None:
-        if options:
-            raise NotImplementedError(
-                "rule options (e.g. alt chains) are not yet supported"
-            )
         self._parser._ruler_install(
-            self._chain, "before", ruleName, fn, beforeName
+            self._chain, "before", ruleName, fn, beforeName,
+            self._normalize_alt(options),
         )
 
     def after(
@@ -194,12 +226,9 @@ class Ruler:
         fn: Callable[..., Any],
         options: dict[str, Any] | None = None,
     ) -> None:
-        if options:
-            raise NotImplementedError(
-                "rule options (e.g. alt chains) are not yet supported"
-            )
         self._parser._ruler_install(
-            self._chain, "after", ruleName, fn, afterName
+            self._chain, "after", ruleName, fn, afterName,
+            self._normalize_alt(options),
         )
 
     def at(
@@ -208,11 +237,10 @@ class Ruler:
         fn: Callable[..., Any],
         options: dict[str, Any] | None = None,
     ) -> None:
-        if options:
-            raise NotImplementedError(
-                "rule options (e.g. alt chains) are not yet supported"
-            )
-        self._parser._ruler_install(self._chain, "at", ruleName, fn)
+        self._parser._ruler_install(
+            self._chain, "at", ruleName, fn, None,
+            self._normalize_alt(options),
+        )
 
     def push(
         self,
@@ -220,11 +248,10 @@ class Ruler:
         fn: Callable[..., Any],
         options: dict[str, Any] | None = None,
     ) -> None:
-        if options:
-            raise NotImplementedError(
-                "rule options (e.g. alt chains) are not yet supported"
-            )
-        self._parser._ruler_install(self._chain, "push", ruleName, fn)
+        self._parser._ruler_install(
+            self._chain, "push", ruleName, fn, None,
+            self._normalize_alt(options),
+        )
 
 
 class _ParserFacade:
@@ -236,6 +263,20 @@ class _InlineParserFacade(_ParserFacade):
     def __init__(self, parser: MarkdownIt):
         super().__init__(parser, "inline")
         self.ruler2 = Ruler(parser, "inline2")
+        self._parser = parser
+
+    def add_terminator_char(self, ch: str) -> None:
+        """Register an ASCII character that stops the inline ``text`` rule.
+
+        Mirrors upstream ``ParserInline.add_terminator_char`` 1:1: plugins
+        installing inline rules that fire on a non-default trigger character
+        call this so the catch-all ``text`` rule yields when it sees that
+        character. Adding a character that is already in the default set
+        is a no-op.
+
+        :param ch: a single ASCII character.
+        """
+        self._parser._add_inline_terminator(ch)
 
 
 class MarkdownIt(_MarkdownIt):
