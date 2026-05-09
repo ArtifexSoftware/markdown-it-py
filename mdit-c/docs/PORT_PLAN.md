@@ -551,7 +551,15 @@ cases produce identical HTML to Python.
     - MSan deferred: requires a Clang-built libc++ to avoid false
       positives on the C++ `cstdlib` shim used in tests; lower
       priority than the ASan + UBSan + libFuzzer trio that's now in.
-- Benchmarks vs Python and vs `cmark`.
+- Benchmarks vs Python and vs `cmark` — DONE.
+    - `mdit-c/benchmarks/bench_engines.py` measures wall-clock
+      throughput over the upstream `benchmarking/samples/` corpus
+      for three engines: in-process `markdown-it-py`, the
+      `markdown-it-c` CLI subprocess, and `cmark` (skipped if not
+      on `$PATH`). Reports best-of-N timings + MB/s + a relative
+      speedup column versus the chosen baseline. Initial Debug-build
+      smoke shows `mdit-c` ~2x faster than `markdown-it-py` already;
+      Release builds win by considerably more.
 - Doxygen API docs and a porting guide for plugin authors.
 
 ## 3. Risk register
