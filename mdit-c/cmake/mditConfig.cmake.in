@@ -13,9 +13,11 @@
 
 include("${CMAKE_CURRENT_LIST_DIR}/mditTargets.cmake")
 
-# Provide a stable alias name. Internally the static library target is
-# `mdit::mdit_static`; we expose `mdit::mdit` so downstream code does
-# not couple to whether we ship a static or shared variant.
+# Provide a stable alias name. The internal CMake target is
+# `mdit::mdit_static` for historical reasons — it may resolve to either
+# a static archive or a versioned shared library depending on how the
+# upstream build was configured (`-DMDIT_BUILD_SHARED=ON` flips it).
+# Downstream code links to `mdit::mdit` so it doesn't have to care.
 if(NOT TARGET mdit::mdit AND TARGET mdit::mdit_static)
     add_library(mdit::mdit ALIAS mdit::mdit_static)
 endif()

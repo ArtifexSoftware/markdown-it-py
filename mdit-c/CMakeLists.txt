@@ -17,12 +17,24 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "" FORCE)
 endif()
 
+# When building the shared library on Windows, every executable in the
+# build tree (CLI, tests, install_smoke staging) needs `libmdit.dll`
+# discoverable. The cleanest fix is to put every runtime artefact
+# (.exe + .dll) in the same directory so the dynamic loader finds it
+# without needing to fiddle with PATH on every add_test() call.
+if(WIN32)
+    if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+        set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    endif()
+endif()
+
 # ---------------------------------------------------------------------------
 # Options
 # ---------------------------------------------------------------------------
 option(MDIT_BUILD_CLI       "Build the md_cli command-line tool"            ON)
 option(MDIT_BUILD_TESTS     "Build the C test suite"                        ON)
 option(MDIT_BUILD_PYBIND    "Build the optional CPython extension"          OFF)
+option(MDIT_BUILD_SHARED    "Build mdit as a shared library (versioned)"    OFF)
 option(MDIT_INSTALL         "Generate install rules + package config"       ON)
 option(MDIT_ENABLE_ASAN     "Build with AddressSanitizer (Debug builds)"    OFF)
 option(MDIT_ENABLE_UBSAN    "Build with UndefinedBehaviorSanitizer"         OFF)
@@ -61,22 +73,38 @@ if(MDIT_ENABLE_UBSAN AND NOT MSVC)
     target_link_options(mdit_sanitizers    INTERFACE -fsanitize=undefined)
 endif()
 
-# ---------------------------------------------------------------------------
-# Library target (Phase 0: header-only placeholder; Phase 1 fills src/)
-# ---------------------------------------------------------------------------
-add_library(mdit INTERFACE)
-target_include_directories(mdit INTERFACE
-    "${CMAKE_CURRENT_SOURCE_DIR}/include"
-)
-target_link_libraries(mdit INTERFACE mdit_warnings mdit_sanitizers)
+# `GNUInstallDirs` defines `CMAKE_INSTALL_INCLUDEDIR` / `CMAKE_INSTALL_LIBDIR`
+# / etc. We pull it in BEFORE the library target so the `INSTALL_INTERFACE`
+# generator expressions below see the resolved values at parse time
+# (these `${CMAKE_INSTALL_*DIR}` substitutions happen immediately, not at
+# generate time, even though they are wrapped in `$<INSTALL_INTERFACE:...>`).
+include(GNUInstallDirs)
 
-# Sources will be wired up in Phase 1. Keeping the placeholder here makes the
-# CMake graph valid today and the diff smaller when implementation lands.
+# ---------------------------------------------------------------------------
+# Library target
+#
+# The CMake target name `mdit_static` is kept for backward compatibility
+# with every consumer (`cli/`, `tests/`, `bindings/python/`). When
+# `MDIT_BUILD_SHARED=ON` it is built as a versioned SHARED library —
+# the target name is then a misnomer but flipping it would ripple into
+# many call sites for no real benefit.
+#
+# OUTPUT_NAME is `mdit` so the produced binary is `libmdit.{a,so,dylib}`
+# or `mdit.{lib,dll}` regardless of kind. On Windows we ask CMake to
+# auto-export every public symbol via WINDOWS_EXPORT_ALL_SYMBOLS so the
+# shared variant works without having to thread `__declspec(dllexport)`
+# annotations through the internal headers.
+# ---------------------------------------------------------------------------
 file(GLOB_RECURSE MDIT_SRC CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.c"
 )
 if(MDIT_SRC)
-    add_library(mdit_static STATIC ${MDIT_SRC})
+    if(MDIT_BUILD_SHARED)
+        set(_MDIT_LIB_KIND SHARED)
+    else()
+        set(_MDIT_LIB_KIND STATIC)
+    endif()
+    add_library(mdit_static ${_MDIT_LIB_KIND} ${MDIT_SRC})
     # PUBLIC includes are wrapped in BUILD_INTERFACE / INSTALL_INTERFACE
     # generator expressions so the same target can be exported via
     # `install(EXPORT)` without CMake complaining about absolute paths
@@ -92,14 +120,26 @@ if(MDIT_SRC)
         "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/mdit>"
     )
     target_link_libraries(mdit_static PRIVATE mdit_warnings mdit_sanitizers)
-    set_target_properties(mdit_static PROPERTIES OUTPUT_NAME mdit)
+    set_target_properties(mdit_static PROPERTIES
+        OUTPUT_NAME mdit
+        VERSION     "${PROJECT_VERSION}"
+        SOVERSION   "${PROJECT_VERSION_MAJOR}"
+    )
+    if(MDIT_BUILD_SHARED)
+        # MSVC: emit a .def-style auto-exports list so consumers see the
+        # full public surface without per-symbol annotations.
+        set_target_properties(mdit_static PROPERTIES
+            WINDOWS_EXPORT_ALL_SYMBOLS ON
+        )
+        # Tell ELF/Mach-O linkers we're building a shared object so
+        # any consumer including the headers compiles with consistent
+        # macros (currently a no-op on POSIX, but keeps the symmetry
+        # with the Windows DLL flag and makes future visibility
+        # tightening trivial).
+        target_compile_definitions(mdit_static PRIVATE MDIT_BUILDING)
+        target_compile_definitions(mdit_static PUBLIC  MDIT_SHARED)
+    endif()
 endif()
-
-# `GNUInstallDirs` is needed to define `CMAKE_INSTALL_INCLUDEDIR` / etc.
-# for the generator-expression PATH above. We pull it in unconditionally
-# so the path expansion is always valid; the install rules themselves
-# are still gated below by `MDIT_INSTALL`.
-include(GNUInstallDirs)
 
 # ---------------------------------------------------------------------------
 # CLI / tests / bindings — wired in their own subdirectories when populated.
@@ -129,7 +169,9 @@ endif()
 # downstream projects to consume `mdit-c` via `find_package(mdit)` or
 # `pkg-config --cflags --libs mdit`. We install:
 #
-#   * the `mdit` static library (PUBLIC headers visible),
+#   * the `mdit` library (static by default; versioned shared when
+#     `MDIT_BUILD_SHARED=ON` — installed under both ARCHIVE and LIBRARY
+#     destinations to cover Windows DLL + import lib correctly),
 #   * the curated public header `include/mdit/mdit.h`,
 #   * the current `src/*.h` headers (relocated under `include/mdit/`)
 #     so callers using the present API surface can link cleanly,

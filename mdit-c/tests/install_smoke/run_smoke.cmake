@@ -77,7 +77,35 @@ if(_n EQUAL 0)
         "install_smoke: built smoke executable not found under ${BINARY_DIR}")
 endif()
 list(GET _smoke_exe 0 _exe)
-execute_process(COMMAND "${_exe}" RESULT_VARIABLE _rc)
+get_filename_component(_exe_dir "${_exe}" DIRECTORY)
+
+# When the parent build produced a shared library, the smoke binary
+# needs the DLL / shared object on its loader search path.
+#
+# * Windows: copy the staged `*.dll` next to `smoke.exe` (sidesteps
+#   PATH manipulation, which `cmake -E env` mangles because Windows
+#   PATH uses `;` and CMake interprets that as a list separator).
+# * POSIX: prepend the staged libdir to LD_LIBRARY_PATH /
+#   DYLD_LIBRARY_PATH (colon-separated, so no CMake list collisions).
+if(WIN32)
+    file(GLOB _stage_dlls "${STAGE_DIR}/bin/*.dll")
+    foreach(_dll IN LISTS _stage_dlls)
+        file(COPY "${_dll}" DESTINATION "${_exe_dir}")
+    endforeach()
+    execute_process(COMMAND "${_exe}" RESULT_VARIABLE _rc)
+else()
+    if(APPLE)
+        set(_libpath_var DYLD_LIBRARY_PATH)
+    else()
+        set(_libpath_var LD_LIBRARY_PATH)
+    endif()
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E env
+            "${_libpath_var}=${STAGE_DIR}/lib:$ENV{${_libpath_var}}"
+            "${_exe}"
+        RESULT_VARIABLE _rc
+    )
+endif()
 if(NOT _rc EQUAL 0)
     message(FATAL_ERROR "install_smoke: smoke ran but failed (${_rc})")
 endif()

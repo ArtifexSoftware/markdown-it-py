@@ -473,9 +473,26 @@ cases produce identical HTML to Python.
       `install_smoke` CTest exercises the whole chain end-to-end:
       stage-install → configure a tiny consumer with
       `find_package(mdit)` → build → run → assert HTML output for
-      `# hi\n`. Versioned shared-lib build is left for a follow-up
-      slice (it requires deciding on symbol-visibility export macros
-      across all `src/*.h` headers).
+      `# hi\n`.
+- [x] **Versioned shared library**. Adds `MDIT_BUILD_SHARED` (default
+      OFF). When ON the `mdit_static` target is built as a SHARED
+      library with `VERSION=${PROJECT_VERSION}` and `SOVERSION=
+      ${PROJECT_VERSION_MAJOR}` (POSIX gets the standard
+      `libmdit.so.0.0.1` + symlink chain; Windows gets `libmdit.dll`
+      + `libmdit.dll.a` import lib). On MSVC `WINDOWS_EXPORT_ALL_SYMBOLS`
+      auto-emits the public surface so we don't have to thread
+      `__declspec(dllexport)` through internal headers in this slice;
+      `MDIT_SHARED` / `MDIT_BUILDING` are defined to leave a clean
+      seam for tightening visibility later. CMake build-tree
+      `RUNTIME_OUTPUT_DIRECTORY` is unified to `bin/` on Windows so
+      every executable finds the DLL without PATH gymnastics, and
+      `install_smoke/run_smoke.cmake` copies the staged DLL beside
+      the smoke binary on Windows / sets `LD_LIBRARY_PATH` /
+      `DYLD_LIBRARY_PATH` on POSIX so the install-consumer test
+      exercises the dynamic-link path end-to-end. While there, fixed
+      a latent CMake bug where `${CMAKE_INSTALL_INCLUDEDIR}` resolved
+      to empty inside the library's `INSTALL_INTERFACE` includes
+      (`include(GNUInstallDirs)` was being called *after* the target).
 
 ### Phase 6 — hardening
 
