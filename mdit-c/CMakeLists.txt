@@ -37,6 +37,7 @@ option(MDIT_BUILD_PYBIND    "Build the optional CPython extension"          OFF)
 option(MDIT_BUILD_SHARED    "Build mdit as a shared library (versioned)"    OFF)
 option(MDIT_BUILD_FUZZ      "Build the libFuzzer-style fuzz harnesses"      OFF)
 option(MDIT_FUZZ_LIBFUZZER  "Link fuzz harnesses with -fsanitize=fuzzer (Clang only)" OFF)
+option(MDIT_BUILD_DOCS      "Configure the Doxygen API reference target"    OFF)
 option(MDIT_INSTALL         "Generate install rules + package config"       ON)
 option(MDIT_ENABLE_ASAN     "Build with AddressSanitizer (Debug builds)"    OFF)
 option(MDIT_ENABLE_UBSAN    "Build with UndefinedBehaviorSanitizer"         OFF)
@@ -166,6 +167,10 @@ endif()
 
 if(MDIT_BUILD_FUZZ AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/fuzz/CMakeLists.txt")
     add_subdirectory(fuzz)
+endif()
+
+if(MDIT_BUILD_DOCS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/docs/CMakeLists.txt")
+    add_subdirectory(docs)
 endif()
 
 # ---------------------------------------------------------------------------

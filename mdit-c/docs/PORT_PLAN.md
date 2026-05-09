@@ -560,7 +560,20 @@ cases produce identical HTML to Python.
       speedup column versus the chosen baseline. Initial Debug-build
       smoke shows `mdit-c` ~2x faster than `markdown-it-py` already;
       Release builds win by considerably more.
-- Doxygen API docs and a porting guide for plugin authors.
+- Doxygen API docs and a porting guide for plugin authors — DONE.
+    - `mdit-c/docs/Doxyfile.in` + `mdit-c/docs/CMakeLists.txt`
+      define a `mdit_docs` custom target gated on
+      `MDIT_BUILD_DOCS=ON`. Configures cleanly without Doxygen
+      installed (one-line warning), and the rendered HTML lands in
+      `${CMAKE_BINARY_DIR}/docs/doxygen/html/`.
+    - `mdit-c/docs/API.md` is the curated mainpage; outlines the
+      header layout, lifecycle, plugin layers, and links into the
+      generated reference.
+    - `mdit-c/docs/PLUGINS.md` is a side-by-side walkthrough for
+      porting `markdown-it-py` plugins, covering all three layers
+      (pure C, CPython, renderer overrides) using a running
+      `:shrug:` example. Includes a porting checklist and the
+      current limitations.
 
 ## 3. Risk register
 

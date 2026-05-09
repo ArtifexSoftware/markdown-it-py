@@ -1,0 +1,52 @@
+# Doxygen configuration for mdit-c.
+#
+# Driven from CMake (``cmake/docs.cmake``) so paths and the project
+# version stay in sync with the source tree. Generated into
+# ``build/docs/doxygen/`` next to other build artifacts; the
+# repository never tracks rendered HTML.
+
+# --- Project --------------------------------------------------------------
+PROJECT_NAME           = "mdit-c"
+PROJECT_NUMBER         = @MDIT_PROJECT_VERSION@
+PROJECT_BRIEF          = "C11 port of markdown-it-py"
+OUTPUT_DIRECTORY       = @MDIT_DOXY_OUTPUT_DIR@
+
+# --- Inputs ---------------------------------------------------------------
+INPUT                  = @MDIT_DOXY_INPUTS@
+FILE_PATTERNS          = *.h *.md
+RECURSIVE              = YES
+EXTENSION_MAPPING      = h=C
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+MARKDOWN_SUPPORT       = YES
+USE_MDFILE_AS_MAINPAGE = @MDIT_DOXY_MAINPAGE@
+EXCLUDE_PATTERNS       = */build*/* */CMakeFiles/*
+
+# --- What to extract -----------------------------------------------------
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = NO
+EXTRACT_PRIVATE        = NO
+HIDE_UNDOC_MEMBERS     = NO
+INTERNAL_DOCS          = NO
+
+# --- Diagnostics ----------------------------------------------------------
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = NO
+WARN_AS_ERROR          = NO
+
+# --- Output ---------------------------------------------------------------
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
+HTML_DYNAMIC_MENUS     = YES
+DISABLE_INDEX          = NO
+SEARCHENGINE           = YES
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+
+# Cross-platform-friendly graphs (skip if dot isn't installed).
+HAVE_DOT               = NO
