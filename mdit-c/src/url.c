@@ -494,17 +494,19 @@ bool mdit_url_parse(mdit_arena *arena,
                             /* re-point `rest_after_host` at this freshly
                              * allocated buffer. We arena-copy so the ptr is
                              * stable. */
-                            rest_after_host = (const char *)mdit_arena_alloc(
-                                arena, nb.len + 1);
-                            memcpy((char *)rest_after_host, nb.data, nb.len);
-                            ((char *)rest_after_host)[nb.len] = '\0';
+                            char *rest_mut =
+                                (char *)mdit_arena_alloc(arena, nb.len + 1);
+                            memcpy(rest_mut, nb.data, nb.len);
+                            rest_mut[nb.len] = '\0';
+                            rest_after_host     = rest_mut;
                             rest_after_host_len = nb.len;
                             mdit_buf_destroy(&nb);
 
                             /* Truncate hostname to valid_parts join '.' */
-                            out->hostname.data = (const char *)mdit_arena_alloc(
-                                arena, valid_end);
-                            memcpy((char *)out->hostname.data, hp, valid_end);
+                            char *hn_mut =
+                                (char *)mdit_arena_alloc(arena, valid_end);
+                            memcpy(hn_mut, hp, valid_end);
+                            out->hostname.data = hn_mut;
                             out->hostname.len = valid_end;
                             broke_early = true;
                             break;

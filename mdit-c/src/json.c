@@ -76,7 +76,21 @@ bool mdit_buf_appendf(mdit_buf *b, const char *fmt, ...)
     va_list ap, ap2;
     va_start(ap, fmt);
     va_copy(ap2, ap);
+    /* ``fmt`` is forwarded from our variadic API; it is not a literal here. */
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
+#endif
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
     int n = vsnprintf(NULL, 0, fmt, ap);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
     va_end(ap);
     if (n < 0) {
         va_end(ap2);
@@ -86,7 +100,20 @@ bool mdit_buf_appendf(mdit_buf *b, const char *fmt, ...)
         va_end(ap2);
         return false;
     }
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
+#endif
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#endif
     int written = vsnprintf(b->data + b->len, b->cap - b->len, fmt, ap2);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
     va_end(ap2);
     if (written < 0) return false;
     b->len += (size_t)written;

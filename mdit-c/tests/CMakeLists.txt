@@ -38,6 +38,14 @@ foreach(suite IN LISTS MDIT_TEST_SUITES)
     )
 endforeach()
 
+# AddressSanitizer rejects absurd malloc sizes before the allocator runs;
+# the OOM-handler test uses a huge size and expects NULL / longjmp instead.
+if(MDIT_ENABLE_ASAN)
+    set_tests_properties(test_arena PROPERTIES
+        ENVIRONMENT "ASAN_OPTIONS=allocator_may_return_null=1"
+    )
+endif()
+
 # The token-oracle runner consumes JSONL files at runtime; tell it
 # where they live (absolute path so the test works regardless of cwd).
 target_compile_definitions(test_token_oracle PRIVATE

@@ -200,12 +200,6 @@ static bool is_pseudo_letter_byte(unsigned char c)
     return false;
 }
 
-/* Forbidden separators per upstream `TEXT_SEPARATORS = [><\uff5c]`. */
-static bool is_text_separator(uint32_t cp)
-{
-    return cp == '<' || cp == '>' || cp == 0xFF5C;
-}
-
 /* "URL byte" allowed in path component: anything that's not whitespace,
  * control, or one of our manually-handled stop chars. We handle
  * trailing-punctuation trimming as a separate pass. */

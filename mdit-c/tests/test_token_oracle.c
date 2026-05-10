@@ -15,7 +15,8 @@
  * shape differences that happen to render the same HTML (e.g. empty
  * children vs. None, markup field values, attribute order).
  *
- * The corpus lives at `mdit-c/tests/oracle/*.jsonl`; the source(s) we
+ * The corpus lives under mdit-c/tests/oracle/ (one JSONL file per
+ * source name); the source(s) we
  * run is controlled by the `SOURCES` array below. Any source not on
  * the list is skipped; new sources should be added as the C port
  * gains rule coverage.

@@ -34,7 +34,12 @@ void   mdit_buf_destroy(mdit_buf *b);
 bool   mdit_buf_reserve(mdit_buf *b, size_t want);
 bool   mdit_buf_append (mdit_buf *b, const char *s, size_t n);
 bool   mdit_buf_append_byte(mdit_buf *b, char c);
+#if defined(__GNUC__) || defined(__clang__)
+bool mdit_buf_appendf(mdit_buf *b, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+#else
 bool   mdit_buf_appendf(mdit_buf *b, const char *fmt, ...);
+#endif
 
 /* Truncate the buffer's logical length back to zero without freeing
  * capacity. Useful for reusing scratch buffers (e.g. the inline state's
