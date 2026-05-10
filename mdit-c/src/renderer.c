@@ -30,6 +30,7 @@ MDIT_VEC_DECLARE(render_entries, mdit_render_entry)
 MDIT_VEC_DEFINE (render_entries, mdit_render_entry)
 
 struct mdit_renderer {
+    mdit_lib_ctx            *lib;
     mdit_arena              *arena;
     mdit_vec_render_entries  rules;
 };
@@ -89,11 +90,13 @@ static bool rule_html_inline (mdit_renderer *, const mdit_token *, size_t, size_
 /* ---------------------------------------------------------------------
  * Lifecycle
  * ------------------------------------------------------------------- */
-mdit_renderer *mdit_renderer_new(mdit_arena *arena)
+mdit_renderer *mdit_renderer_new(mdit_lib_ctx *lib, mdit_arena *arena)
 {
-    mdit_renderer *r = (mdit_renderer *)mdit_arena_zalloc(arena, sizeof *r);
+    mdit_renderer *r =
+        (mdit_renderer *)mdit_arena_zalloc(lib, arena, sizeof *r);
+    r->lib   = lib;
     r->arena = arena;
-    mdit_vec_render_entries_init(&r->rules, arena);
+    mdit_vec_render_entries_init(&r->rules, lib, arena);
 
     /* Pre-register the default render rules to match upstream defaults. */
     (void)mdit_renderer_add_rule(r, MDIT_STR_LIT("code_inline"),  rule_code_inline);

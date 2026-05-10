@@ -70,7 +70,7 @@ typedef bool (*mdit_render_rule)(
     mdit_buf *out);
 
 /* Lifecycle. */
-mdit_renderer *mdit_renderer_new   (mdit_arena *arena);
+mdit_renderer *mdit_renderer_new   (mdit_lib_ctx *lib, mdit_arena *arena);
 void           mdit_renderer_destroy(mdit_renderer *r);
 
 /* Register / replace a render rule for a token type. */

@@ -4,14 +4,17 @@
 #include <stdbool.h>
 
 #include "arena.h"
+#include "mdit/mdit_lib_ctx.h"
 #include "str.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-bool mdit_normalize_link     (mdit_arena *arena, mdit_str url, mdit_str *out);
-bool mdit_normalize_link_text(mdit_arena *arena, mdit_str url, mdit_str *out);
+bool mdit_normalize_link     (mdit_lib_ctx *lib, mdit_arena *arena,
+                              mdit_str url, mdit_str *out);
+bool mdit_normalize_link_text(mdit_lib_ctx *lib, mdit_arena *arena,
+                               mdit_str url, mdit_str *out);
 bool mdit_validate_link      (mdit_str url);
 
 #ifdef __cplusplus

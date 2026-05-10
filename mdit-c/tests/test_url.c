@@ -8,6 +8,7 @@
 #include "mdit_test.h"
 
 #include "arena.h"
+#include "mdit/mdit_lib_ctx.h"
 #include "json.h"
 #include "str.h"
 #include "url.h"
@@ -52,13 +53,15 @@ static void check_field(const char *label,
  * ------------------------------------------------------------------- */
 MDIT_TEST(url_parse_matches_python_for_sample)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     for (size_t i = 0; i < k_url_parse_cases_len; ++i) {
         const mdit_url_parse_case *c = &k_url_parse_cases[i];
         mdit_arena a; mdit_arena_init(&a, 0);
         mdit_url u;
         mdit_str input;
         input.data = c->input; input.len = c->input_len;
-        if (!mdit_url_parse(&a, input, false, &u)) {
+        if (!mdit_url_parse(&lib, &a, input, false, &u)) {
             mdit_test_fail(__FILE__, __LINE__, "mdit_url_parse: OOM");
         }
 
@@ -92,24 +95,26 @@ MDIT_TEST(url_parse_matches_python_for_sample)
             mdit_test_fail(__FILE__, __LINE__, msg);
         }
 
-        mdit_arena_destroy(&a);
+        mdit_arena_destroy(&lib, &a);
     }
 }
 
 MDIT_TEST(url_format_matches_python_for_sample)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     for (size_t i = 0; i < k_url_parse_cases_len; ++i) {
         const mdit_url_parse_case *c = &k_url_parse_cases[i];
         mdit_arena a; mdit_arena_init(&a, 0);
         mdit_url u;
         mdit_str input;
         input.data = c->input; input.len = c->input_len;
-        (void)mdit_url_parse(&a, input, false, &u);
+        (void)mdit_url_parse(&lib, &a, input, false, &u);
 
         mdit_buf b; mdit_buf_init(&b);
         if (!mdit_url_format(&u, &b)) {
             mdit_buf_destroy(&b);
-            mdit_arena_destroy(&a);
+            mdit_arena_destroy(&lib, &a);
             mdit_test_fail(__FILE__, __LINE__, "mdit_url_format: OOM");
         }
         if (mdit_buf_len(&b) != c->format_len ||
@@ -119,11 +124,11 @@ MDIT_TEST(url_format_matches_python_for_sample)
                 "format mismatch for input %s\n  got:  %s\n  want: %s",
                 c->input, mdit_buf_str(&b), c->format);
             mdit_buf_destroy(&b);
-            mdit_arena_destroy(&a);
+            mdit_arena_destroy(&lib, &a);
             mdit_test_fail(__FILE__, __LINE__, msg);
         }
         mdit_buf_destroy(&b);
-        mdit_arena_destroy(&a);
+        mdit_arena_destroy(&lib, &a);
     }
 }
 
@@ -222,10 +227,12 @@ MDIT_TEST(url_decode_component_matches_python)
  * ------------------------------------------------------------------- */
 MDIT_TEST(url_format_roundtrip_basic)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_url u;
-    if (!mdit_url_parse(&a, MDIT_STR_LIT("https://e.org/p?q#h"), false, &u)) {
-        mdit_arena_destroy(&a);
+    if (!mdit_url_parse(&lib, &a, MDIT_STR_LIT("https://e.org/p?q#h"), false, &u)) {
+        mdit_arena_destroy(&lib, &a);
         mdit_test_fail(__FILE__, __LINE__, "parse failed");
     }
     MDIT_ASSERT_TRUE(u.has_protocol);
@@ -245,7 +252,7 @@ MDIT_TEST(url_format_roundtrip_basic)
     MDIT_ASSERT_STR_EQ(mdit_buf_str(&b), "https://e.org/p?q#h");
     mdit_buf_destroy(&b);
 
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(url_encode_skips_already_escaped_when_keep_escaped)

@@ -13,15 +13,18 @@
 
 #include "main.h"
 #include "arena.h"
+#include "mdit/mdit_lib_ctx.h"
 #include "str.h"
 
 int main(void)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a;
     mdit_arena_init(&a, 0);
 
     mdit_md md;
-    if (!mdit_md_init(&md, &a)) {
+    if (!mdit_md_init(&md, &lib, &a)) {
         fprintf(stderr, "mdit_md_init failed\n");
         return 2;
     }
@@ -46,7 +49,7 @@ int main(void)
 
     mdit_buf_destroy(&out);
     mdit_md_destroy(&md);
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 
     fputs(ok ? "install_smoke: OK\n" : "install_smoke: FAIL\n",
           ok ? stdout : stderr);

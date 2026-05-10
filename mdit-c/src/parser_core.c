@@ -66,7 +66,7 @@ static void core_normalize(mdit_state_core *state)
     }
     if (!needs_rewrite) return;
 
-    char *dst = (char *)mdit_arena_alloc(state->arena, out_len);
+    char *dst = (char *)mdit_arena_alloc(state->md->lib, state->arena, out_len);
     if (dst == NULL) return;
     size_t w = 0;
     for (size_t i = 0; i < n; ++i) {
@@ -94,7 +94,7 @@ static void core_block(mdit_state_core *state)
     if (state->inlineMode) {
         mdit_token *t = mdit_vec_token_emplace(state->tokens);
         if (t == NULL) return;
-        mdit_token_init(t, state->arena, MDIT_STR_LIT("inline"),
+        mdit_token_init(t, state->md->lib, state->arena, MDIT_STR_LIT("inline"),
                         MDIT_STR_LIT(""), 0);
         t->content = state->src;
         mdit_token_set_map(t, 0, 1);
@@ -144,8 +144,8 @@ static bool ensure_children_cap(mdit_token *parent, size_t want)
     if (want <= parent->children_cap) return true;
     size_t cap = parent->children_cap < 4 ? 4 : parent->children_cap;
     while (cap < want) cap *= 2;
-    mdit_token *fresh = (mdit_token *)mdit_arena_alloc(parent->arena,
-        cap * sizeof *fresh);
+    mdit_token *fresh = (mdit_token *)mdit_arena_alloc(parent->lib,
+        parent->arena, cap * sizeof *fresh);
     if (fresh == NULL) return false;
     if (parent->children_len > 0) {
         memcpy(fresh, parent->children,
@@ -189,7 +189,7 @@ static void core_linkify(mdit_state_core *state)
     for (size_t ti = 0; ti < state->tokens->len; ++ti) {
         mdit_token *inl = &state->tokens->data[ti];
         if (!mdit_str_eq_z(inl->type, "inline")) continue;
-        if (!L->pretest(L->self, inl->content)) continue;
+        if (!L->pretest(L->self, state->md->lib, inl->content)) continue;
 
         int html_link_level = 0;
         /* Walk children in reverse so insertions don't shift indices
@@ -229,10 +229,10 @@ static void core_linkify(mdit_state_core *state)
 
             if (!mdit_str_eq_z(cur->type, "text")) continue;
             mdit_str text = cur->content;
-            if (!L->test(L->self, text)) continue;
+            if (!L->test(L->self, state->md->lib, text)) continue;
 
             mdit_linkify_match *links = NULL;
-            size_t n_links = L->match_all(L->self, state->arena,
+            size_t n_links = L->match_all(L->self, state->md->lib, state->arena,
                                           text, &links);
             if (n_links == 0) continue;
 
@@ -247,7 +247,7 @@ static void core_linkify(mdit_state_core *state)
 
             int32_t level = cur->level;
             size_t last_pos = 0;
-            mdit_token *nodes = (mdit_token *)mdit_arena_alloc(state->arena,
+            mdit_token *nodes = (mdit_token *)mdit_arena_alloc(state->md->lib, state->arena,
                 (4 * n_links + 1) * sizeof *nodes);
             if (nodes == NULL) continue;
             size_t n_nodes = 0;
@@ -256,12 +256,12 @@ static void core_linkify(mdit_state_core *state)
             for (size_t k = 0; k < n_links; ++k) {
                 mdit_linkify_match *lk = &links[k];
                 mdit_str href;
-                if (!mdit_normalize_link(state->arena, lk->url, &href)) continue;
+                if (!mdit_normalize_link(state->md->lib, state->arena, lk->url, &href)) continue;
                 if (!mdit_validate_link(href)) continue;
 
                 if (lk->index > last_pos) {
                     mdit_token *tk = &nodes[n_nodes++];
-                    mdit_token_init(tk, state->arena,
+                    mdit_token_init(tk, state->md->lib, state->arena,
                         MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
                     tk->content = (mdit_str){
                         text.data + last_pos, lk->index - last_pos
@@ -270,7 +270,7 @@ static void core_linkify(mdit_state_core *state)
                 }
 
                 mdit_token *open = &nodes[n_nodes++];
-                mdit_token_init(open, state->arena,
+                mdit_token_init(open, state->md->lib, state->arena,
                     MDIT_STR_LIT("link_open"), MDIT_STR_LIT("a"), 1);
                 (void)mdit_token_attr_set_z(open, "href",
                                             mdit_value_str(href));
@@ -287,12 +287,12 @@ static void core_linkify(mdit_state_core *state)
                     /* schemaless — prepend "http://" then strip after
                      * normalize_link_text. */
                     size_t plen = 7;
-                    char *full = (char *)mdit_arena_alloc(state->arena,
+                    char *full = (char *)mdit_arena_alloc(state->md->lib, state->arena,
                         plen + lk->text.len);
                     memcpy(full, "http://", plen);
                     memcpy(full + plen, lk->text.data, lk->text.len);
                     mdit_str rendered;
-                    if (!mdit_normalize_link_text(state->arena,
+                    if (!mdit_normalize_link_text(state->md->lib, state->arena,
                             (mdit_str){ full, plen + lk->text.len },
                             &rendered)) {
                         url_text = lk->text;
@@ -307,20 +307,20 @@ static void core_linkify(mdit_state_core *state)
                         }
                     }
                 } else {
-                    if (!mdit_normalize_link_text(state->arena,
+                    if (!mdit_normalize_link_text(state->md->lib, state->arena,
                             lk->text, &url_text)) {
                         url_text = lk->text;
                     }
                 }
 
                 mdit_token *txt = &nodes[n_nodes++];
-                mdit_token_init(txt, state->arena,
+                mdit_token_init(txt, state->md->lib, state->arena,
                     MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
                 txt->content = url_text;
                 txt->level   = cur_level;
 
                 mdit_token *close = &nodes[n_nodes++];
-                mdit_token_init(close, state->arena,
+                mdit_token_init(close, state->md->lib, state->arena,
                     MDIT_STR_LIT("link_close"), MDIT_STR_LIT("a"), -1);
                 --cur_level;
                 close->level  = cur_level;
@@ -332,7 +332,7 @@ static void core_linkify(mdit_state_core *state)
 
             if (last_pos < text.len) {
                 mdit_token *tk = &nodes[n_nodes++];
-                mdit_token_init(tk, state->arena,
+                mdit_token_init(tk, state->md->lib, state->arena,
                     MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
                 tk->content = (mdit_str){
                     text.data + last_pos, text.len - last_pos
@@ -387,24 +387,24 @@ static void buf_append_byte(char *out, size_t *out_len, unsigned char c)
  * replacement passes. Worst case: `..` (2 bytes) -> `…` (3 bytes), or
  * `--` (2 bytes) -> `–` (3 bytes), so 1.5x is the upper bound. We
  * round up to 2x + 32 for safety. */
-static char *repl_alloc_out(mdit_arena *a, size_t in_len)
+static char *repl_alloc_out(mdit_lib_ctx *lib, mdit_arena *a, size_t in_len)
 {
-    return (char *)mdit_arena_alloc(a, 2 * in_len + 32);
+    return (char *)mdit_arena_alloc(lib, a, 2 * in_len + 32);
 }
 
-static mdit_str repl_finalize(mdit_arena *a, char *buf, size_t len)
+static mdit_str repl_finalize(mdit_lib_ctx *lib, mdit_arena *a, char *buf, size_t len)
 {
     /* Tighten allocation: shrink to actual length so subsequent
      * arena allocations don't waste the slack. */
-    char *tight = (char *)mdit_arena_alloc(a, len == 0 ? 1 : len);
+    char *tight = (char *)mdit_arena_alloc(lib, a, len == 0 ? 1 : len);
     if (tight && len > 0) memcpy(tight, buf, len);
     return (mdit_str){ tight, len };
 }
 
 /* SCOPED_ABBR_RE = `\((c|tm|r)\)`, case-insensitive. */
-static mdit_str repl_scoped_abbr(mdit_arena *a, mdit_str in)
+static mdit_str repl_scoped_abbr(mdit_lib_ctx *lib, mdit_arena *a, mdit_str in)
 {
-    char *out = repl_alloc_out(a, in.len);
+    char *out = repl_alloc_out(lib, a, in.len);
     if (out == NULL) return in;
     size_t w = 0;
     size_t i = 0;
@@ -437,13 +437,13 @@ static mdit_str repl_scoped_abbr(mdit_arena *a, mdit_str in)
         buf_append_byte(out, &w, (unsigned char)in.data[i]);
         ++i;
     }
-    return repl_finalize(a, out, w);
+    return repl_finalize(lib, a, out, w);
 }
 
 /* PLUS_MINUS_RE = `\+-` -> `±`. */
-static mdit_str repl_plus_minus(mdit_arena *a, mdit_str in)
+static mdit_str repl_plus_minus(mdit_lib_ctx *lib, mdit_arena *a, mdit_str in)
 {
-    char *out = repl_alloc_out(a, in.len);
+    char *out = repl_alloc_out(lib, a, in.len);
     if (out == NULL) return in;
     size_t w = 0;
     for (size_t i = 0; i < in.len; ++i) {
@@ -454,14 +454,14 @@ static mdit_str repl_plus_minus(mdit_arena *a, mdit_str in)
         }
         buf_append_byte(out, &w, (unsigned char)in.data[i]);
     }
-    return repl_finalize(a, out, w);
+    return repl_finalize(lib, a, out, w);
 }
 
 /* ELLIPSIS_RE = `\.{2,}` -> `…`. Two or more dots collapse to a single
  * horizontal ellipsis. */
-static mdit_str repl_ellipsis(mdit_arena *a, mdit_str in)
+static mdit_str repl_ellipsis(mdit_lib_ctx *lib, mdit_arena *a, mdit_str in)
 {
-    char *out = repl_alloc_out(a, in.len);
+    char *out = repl_alloc_out(lib, a, in.len);
     if (out == NULL) return in;
     size_t w = 0;
     size_t i = 0;
@@ -482,14 +482,14 @@ static mdit_str repl_ellipsis(mdit_arena *a, mdit_str in)
         buf_append_byte(out, &w, (unsigned char)in.data[i]);
         ++i;
     }
-    return repl_finalize(a, out, w);
+    return repl_finalize(lib, a, out, w);
 }
 
 /* ELLIPSIS_QUESTION_EXCLAMATION_RE = `([?!])…` -> `\1..`. Reverts the
  * ellipsis collapse for `?….` / `!….` sequences. */
-static mdit_str repl_excl_ellipsis_revert(mdit_arena *a, mdit_str in)
+static mdit_str repl_excl_ellipsis_revert(mdit_lib_ctx *lib, mdit_arena *a, mdit_str in)
 {
-    char *out = repl_alloc_out(a, in.len);
+    char *out = repl_alloc_out(lib, a, in.len);
     if (out == NULL) return in;
     size_t w = 0;
     size_t i = 0;
@@ -507,14 +507,14 @@ static mdit_str repl_excl_ellipsis_revert(mdit_arena *a, mdit_str in)
         buf_append_byte(out, &w, (unsigned char)in.data[i]);
         ++i;
     }
-    return repl_finalize(a, out, w);
+    return repl_finalize(lib, a, out, w);
 }
 
 /* QUESTION_EXCLAMATION_RE = `([?!]){4,}` -> `\1\1\1`. A run of 4+ of
  * the *same* `?` or `!` collapses to 3 of that char. */
-static mdit_str repl_question_excl_run(mdit_arena *a, mdit_str in)
+static mdit_str repl_question_excl_run(mdit_lib_ctx *lib, mdit_arena *a, mdit_str in)
 {
-    char *out = repl_alloc_out(a, in.len);
+    char *out = repl_alloc_out(lib, a, in.len);
     if (out == NULL) return in;
     size_t w = 0;
     size_t i = 0;
@@ -540,13 +540,13 @@ static mdit_str repl_question_excl_run(mdit_arena *a, mdit_str in)
         buf_append_byte(out, &w, (unsigned char)in.data[i]);
         ++i;
     }
-    return repl_finalize(a, out, w);
+    return repl_finalize(lib, a, out, w);
 }
 
 /* COMMA_RE = `,{2,}` -> `,`. Run of two or more commas collapses to one. */
-static mdit_str repl_comma(mdit_arena *a, mdit_str in)
+static mdit_str repl_comma(mdit_lib_ctx *lib, mdit_arena *a, mdit_str in)
 {
-    char *out = repl_alloc_out(a, in.len);
+    char *out = repl_alloc_out(lib, a, in.len);
     if (out == NULL) return in;
     size_t w = 0;
     size_t i = 0;
@@ -567,7 +567,7 @@ static mdit_str repl_comma(mdit_arena *a, mdit_str in)
         buf_append_byte(out, &w, (unsigned char)in.data[i]);
         ++i;
     }
-    return repl_finalize(a, out, w);
+    return repl_finalize(lib, a, out, w);
 }
 
 /* Python `re.\s` set, including U+2028 / U+2029 (which markdown-it's
@@ -614,9 +614,9 @@ static size_t cp_next(const char *s, size_t i, size_t n, uint32_t *out_cp)
 
 /* EM_DASH_RE = `(^|[^-])---(?=[^-]|$)`, multiline. The captured `\1`
  * is preserved (start-of-line or non-`-` byte). */
-static mdit_str repl_em_dash(mdit_arena *a, mdit_str in)
+static mdit_str repl_em_dash(mdit_lib_ctx *lib, mdit_arena *a, mdit_str in)
 {
-    char *out = repl_alloc_out(a, in.len);
+    char *out = repl_alloc_out(lib, a, in.len);
     if (out == NULL) return in;
     size_t w = 0;
     size_t i = 0;
@@ -649,15 +649,15 @@ static mdit_str repl_em_dash(mdit_arena *a, mdit_str in)
         buf_append_byte(out, &w, (unsigned char)in.data[i]);
         ++i;
     }
-    return repl_finalize(a, out, w);
+    return repl_finalize(lib, a, out, w);
 }
 
 /* EN_DASH_RE = `(^|\s)--(?=\s|$)`, multiline. `\s` matches Python's
  * Unicode whitespace set. The leading `\s` is preserved; the `--` is
  * replaced with `–` (U+2013). */
-static mdit_str repl_en_dash(mdit_arena *a, mdit_str in)
+static mdit_str repl_en_dash(mdit_lib_ctx *lib, mdit_arena *a, mdit_str in)
 {
-    char *out = repl_alloc_out(a, in.len);
+    char *out = repl_alloc_out(lib, a, in.len);
     if (out == NULL) return in;
     size_t w = 0;
     size_t i = 0;
@@ -692,13 +692,13 @@ static mdit_str repl_en_dash(mdit_arena *a, mdit_str in)
         buf_append_byte(out, &w, (unsigned char)in.data[i]);
         ++i;
     }
-    return repl_finalize(a, out, w);
+    return repl_finalize(lib, a, out, w);
 }
 
 /* EN_DASH_INDENT_RE = `(^|[^-\s])--(?=[^-\s]|$)`, multiline. */
-static mdit_str repl_en_dash_indent(mdit_arena *a, mdit_str in)
+static mdit_str repl_en_dash_indent(mdit_lib_ctx *lib, mdit_arena *a, mdit_str in)
 {
-    char *out = repl_alloc_out(a, in.len);
+    char *out = repl_alloc_out(lib, a, in.len);
     if (out == NULL) return in;
     size_t w = 0;
     size_t i = 0;
@@ -730,7 +730,7 @@ static mdit_str repl_en_dash_indent(mdit_arena *a, mdit_str in)
         buf_append_byte(out, &w, (unsigned char)in.data[i]);
         ++i;
     }
-    return repl_finalize(a, out, w);
+    return repl_finalize(lib, a, out, w);
 }
 
 /* Cheap content checks mirroring upstream's `SCOPED_ABBR_RE.search` /
@@ -773,7 +773,7 @@ static bool content_has_rare(mdit_str s)
     return false;
 }
 
-static void replace_scoped(mdit_arena *a, mdit_token *parent)
+static void replace_scoped(mdit_lib_ctx *lib, mdit_arena *a, mdit_token *parent)
 {
     /* The `inside_autolink` counter mirrors upstream's odd convention
      * (link_open decrements, link_close increments). The net effect
@@ -784,7 +784,7 @@ static void replace_scoped(mdit_arena *a, mdit_token *parent)
         mdit_token *t = &parent->children[i];
         if (mdit_str_eq_z(t->type, "text") && inside_autolink == 0) {
             if (content_has_scoped_abbr(t->content)) {
-                t->content = repl_scoped_abbr(a, t->content);
+                t->content = repl_scoped_abbr(lib, a, t->content);
             }
         }
         if (mdit_str_eq_z(t->type, "link_open") &&
@@ -798,7 +798,7 @@ static void replace_scoped(mdit_arena *a, mdit_token *parent)
     }
 }
 
-static void replace_rare(mdit_arena *a, mdit_token *parent)
+static void replace_rare(mdit_lib_ctx *lib, mdit_arena *a, mdit_token *parent)
 {
     int inside_autolink = 0;
     for (size_t i = 0; i < parent->children_len; ++i) {
@@ -806,14 +806,14 @@ static void replace_rare(mdit_arena *a, mdit_token *parent)
         if (mdit_str_eq_z(t->type, "text") && inside_autolink == 0 &&
             content_has_rare(t->content)) {
             mdit_str c = t->content;
-            c = repl_plus_minus(a, c);
-            c = repl_ellipsis(a, c);
-            c = repl_excl_ellipsis_revert(a, c);
-            c = repl_question_excl_run(a, c);
-            c = repl_comma(a, c);
-            c = repl_em_dash(a, c);
-            c = repl_en_dash(a, c);
-            c = repl_en_dash_indent(a, c);
+            c = repl_plus_minus(lib, a, c);
+            c = repl_ellipsis(lib, a, c);
+            c = repl_excl_ellipsis_revert(lib, a, c);
+            c = repl_question_excl_run(lib, a, c);
+            c = repl_comma(lib, a, c);
+            c = repl_em_dash(lib, a, c);
+            c = repl_en_dash(lib, a, c);
+            c = repl_en_dash_indent(lib, a, c);
             t->content = c;
         }
         if (mdit_str_eq_z(t->type, "link_open") &&
@@ -835,10 +835,10 @@ static void core_replacements(mdit_state_core *state)
         if (!mdit_str_eq_z(inl->type, "inline")) continue;
         if (inl->children == NULL) continue;
         if (content_has_scoped_abbr(inl->content)) {
-            replace_scoped(state->arena, inl);
+            replace_scoped(state->md->lib, state->arena, inl);
         }
         if (content_has_rare(inl->content)) {
-            replace_rare(state->arena, inl);
+            replace_rare(state->md->lib, state->arena, inl);
         }
     }
 }
@@ -861,11 +861,11 @@ static void core_replacements(mdit_state_core *state)
 /* `str.replace_at(index, ch_str)`: produce a fresh arena buffer where
  * the byte at `index` is replaced with `repl[0..repl_len)`. Returns
  * the number of bytes added (`repl_len - 1`). */
-static mdit_str sq_replace_at(mdit_arena *a, mdit_str s,
+static mdit_str sq_replace_at(mdit_lib_ctx *lib, mdit_arena *a, mdit_str s,
                               size_t index, mdit_str repl)
 {
     size_t total = s.len - 1 + repl.len;
-    char *buf = (char *)mdit_arena_alloc(a, total == 0 ? 1 : total);
+    char *buf = (char *)mdit_arena_alloc(lib, a, total == 0 ? 1 : total);
     if (buf == NULL) return s;
     memcpy(buf, s.data, index);
     if (repl.len > 0) memcpy(buf + index, repl.data, repl.len);
@@ -920,7 +920,7 @@ static uint32_t sq_lookup_next_cp(mdit_token *parent, size_t i)
     return 0x20;
 }
 
-static void process_quote_inlines(mdit_arena *a,
+static void process_quote_inlines(mdit_lib_ctx *lib, mdit_arena *a,
                                   mdit_token *parent,
                                   mdit_str opts_quotes[4])
 {
@@ -1006,7 +1006,7 @@ static void process_quote_inlines(mdit_arena *a,
             if (!can_open && !can_close) {
                 if (is_single) {
                     /* Bare apostrophe in middle of word. */
-                    tok->content = sq_replace_at(a, tok->content, q,
+                    tok->content = sq_replace_at(lib, a, tok->content, q,
                                                  apostrophe);
                     /* `pos` advances past the new (multi-byte) char. */
                     pos = q + apostrophe.len;
@@ -1039,7 +1039,7 @@ static void process_quote_inlines(mdit_arena *a,
                          * in an earlier token). Mirrors upstream's
                          * order so indices in the *opening* token
                          * stay correct. */
-                        tok->content = sq_replace_at(a, tok->content,
+                        tok->content = sq_replace_at(lib, a, tok->content,
                                                      q, close_quote);
 
                         /* If both opener and closer are in the same
@@ -1047,11 +1047,11 @@ static void process_quote_inlines(mdit_arena *a,
                          * because we just replaced a position *after*
                          * it. Otherwise, mutate the opener's token. */
                         if (open_frame.token_idx == i) {
-                            tok->content = sq_replace_at(a, tok->content,
+                            tok->content = sq_replace_at(lib, a, tok->content,
                                 open_frame.pos, open_quote);
                         } else {
                             mdit_token *op = &parent->children[open_frame.token_idx];
-                            op->content = sq_replace_at(a, op->content,
+                            op->content = sq_replace_at(lib, a, op->content,
                                 open_frame.pos, open_quote);
                         }
 
@@ -1076,7 +1076,7 @@ static void process_quote_inlines(mdit_arena *a,
                 /* Push a new frame. */
                 if (stack_len + 1 > stack_cap) {
                     size_t cap = stack_cap < 4 ? 4 : stack_cap * 2;
-                    sq_frame *fresh = (sq_frame *)mdit_arena_alloc(a,
+                    sq_frame *fresh = (sq_frame *)mdit_arena_alloc(lib, a,
                         cap * sizeof *fresh);
                     if (fresh == NULL) return;
                     if (stack_len > 0) {
@@ -1088,7 +1088,7 @@ static void process_quote_inlines(mdit_arena *a,
                 stack[stack_len++] = (sq_frame){ i, q, is_single, this_level };
                 pos = q + 1;
             } else if (can_close && is_single) {
-                tok->content = sq_replace_at(a, tok->content, q,
+                tok->content = sq_replace_at(lib, a, tok->content, q,
                                              apostrophe);
                 pos = q + apostrophe.len;
             } else {
@@ -1114,7 +1114,7 @@ static void core_smartquotes(mdit_state_core *state)
             }
         }
         if (!has_quote) continue;
-        process_quote_inlines(state->arena, inl,
+        process_quote_inlines(state->md->lib, state->arena, inl,
                               state->md->options.quotes);
     }
 }
@@ -1147,7 +1147,7 @@ static void core_text_join(mdit_state_core *state)
                 /* Merge with previous text token. */
                 mdit_token *prev = &inl->children[w - 1];
                 size_t total = prev->content.len + c->content.len;
-                char *buf = (char *)mdit_arena_alloc(state->arena, total);
+                char *buf = (char *)mdit_arena_alloc(state->md->lib, state->arena, total);
                 memcpy(buf, prev->content.data, prev->content.len);
                 memcpy(buf + prev->content.len,
                        c->content.data, c->content.len);
@@ -1165,10 +1165,12 @@ static void core_text_join(mdit_state_core *state)
 /* ---------------------------------------------------------------------
  * Lifecycle
  * ------------------------------------------------------------------- */
-bool mdit_parser_core_init(mdit_parser_core *p, mdit_arena *arena)
+bool mdit_parser_core_init(mdit_parser_core *p, mdit_lib_ctx *lib,
+                           mdit_arena *arena)
 {
+    p->lib   = lib;
     p->arena = arena;
-    p->ruler = mdit_ruler_new(arena);
+    p->ruler = mdit_ruler_new(lib, arena);
     if (p->ruler == NULL) return false;
     if (mdit_ruler_push(p->ruler, MDIT_STR_LIT("normalize"),
                         (mdit_rule_fn)core_normalize, NULL,

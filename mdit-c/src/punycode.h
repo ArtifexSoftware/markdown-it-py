@@ -58,10 +58,12 @@ bool mdit_punycode_decode_to_utf8(mdit_str input, mdit_buf *out);
 /* High-level: convert ``hostname`` (a single domain, optionally with
  * an ``@``-prefixed email local part) to its IDN ASCII form. Output
  * is allocated from ``arena`` and returned via ``*out``. */
-bool mdit_idn_to_ascii(mdit_arena *arena, mdit_str hostname, mdit_str *out);
+bool mdit_idn_to_ascii(mdit_lib_ctx *lib, mdit_arena *arena,
+                       mdit_str hostname, mdit_str *out);
 
 /* Inverse: decode any ``xn--`` labels back to UTF-8 Unicode. */
-bool mdit_idn_to_unicode(mdit_arena *arena, mdit_str hostname, mdit_str *out);
+bool mdit_idn_to_unicode(mdit_lib_ctx *lib, mdit_arena *arena,
+                         mdit_str hostname, mdit_str *out);
 
 #ifdef __cplusplus
 }

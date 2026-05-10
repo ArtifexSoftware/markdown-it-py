@@ -27,7 +27,9 @@ static bool ensure_cap(mdit_map *m, size_t want_cap)
     if (cap > (size_t)-1 / sizeof(mdit_map_entry)) return false;
 
     if (m->arena != NULL) {
-        mdit_map_entry *fresh = (mdit_map_entry *)mdit_arena_alloc(m->arena, bytes);
+        if (m->lib == NULL) return false;
+        mdit_map_entry *fresh =
+            (mdit_map_entry *)mdit_arena_alloc(m->lib, m->arena, bytes);
         if (m->len > 0) {
             memcpy(fresh, m->data, m->len * sizeof(mdit_map_entry));
         }
@@ -54,11 +56,12 @@ static size_t find_index(const mdit_map *m, mdit_str key)
 /* ---------------------------------------------------------------------
  * Lifecycle
  * ------------------------------------------------------------------- */
-void mdit_map_init(mdit_map *m, mdit_arena *arena)
+void mdit_map_init(mdit_map *m, mdit_lib_ctx *lib, mdit_arena *arena)
 {
     m->data  = NULL;
     m->len   = 0;
     m->cap   = 0;
+    m->lib   = lib;
     m->arena = arena;
 }
 

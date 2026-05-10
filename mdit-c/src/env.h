@@ -5,6 +5,7 @@
 #include <stddef.h>
 
 #include "arena.h"
+#include "mdit/mdit_lib_ctx.h"
 #include "str.h"
 
 #ifdef __cplusplus
@@ -20,6 +21,7 @@ typedef struct mdit_reference {
 } mdit_reference;
 
 typedef struct mdit_env {
+    mdit_lib_ctx   *lib;
     mdit_arena     *arena;
     mdit_reference *references;
     size_t          references_len;
@@ -34,7 +36,7 @@ typedef struct mdit_env {
     void           *user;
 } mdit_env;
 
-void mdit_env_init(mdit_env *env, mdit_arena *arena);
+void mdit_env_init(mdit_env *env, mdit_lib_ctx *lib, mdit_arena *arena);
 
 bool mdit_env_add_reference(mdit_env *env,
                             mdit_str label,
@@ -51,7 +53,8 @@ const mdit_reference *mdit_env_get_reference(const mdit_env *env,
  * arena-allocated. (Full Unicode case-folding is not yet implemented;
  * non-ASCII labels are matched verbatim after whitespace collapsing.)
  */
-mdit_str mdit_env_normalize_reference(mdit_arena *arena, mdit_str input);
+mdit_str mdit_env_normalize_reference(mdit_lib_ctx *lib, mdit_arena *arena,
+                                      mdit_str input);
 
 #ifdef __cplusplus
 }

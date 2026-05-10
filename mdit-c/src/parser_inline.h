@@ -28,9 +28,10 @@ typedef bool (*mdit_inline_rule_fn) (mdit_state_inline *state, bool silent);
 typedef void (*mdit_inline_rule2_fn)(mdit_state_inline *state);
 
 typedef struct mdit_parser_inline {
-    mdit_ruler *ruler;
-    mdit_ruler *ruler2;
-    mdit_arena *arena;
+    mdit_ruler   *ruler;
+    mdit_ruler   *ruler2;
+    mdit_lib_ctx *lib;
+    mdit_arena   *arena;
 
     /* Bitmap of ASCII characters that terminate the text rule. Bytes
      * >= 0x80 are never terminators (no Unicode-aware terminators are
@@ -38,7 +39,8 @@ typedef struct mdit_parser_inline {
     bool        terminator_ascii[256];
 } mdit_parser_inline;
 
-bool mdit_parser_inline_init   (mdit_parser_inline *p, mdit_arena *arena);
+bool mdit_parser_inline_init   (mdit_parser_inline *p, mdit_lib_ctx *lib,
+                                mdit_arena *arena);
 void mdit_parser_inline_destroy(mdit_parser_inline *p);
 
 /* Add a single ASCII char to the terminator set. (Plugin hook.) */

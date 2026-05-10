@@ -102,10 +102,11 @@ static int detect_task_checkbox(const char *src, int32_t pos, int32_t maximum)
 }
 
 /* Allocate a fresh copy of `data[0..n)` in the arena. */
-static mdit_str arena_copy_str(mdit_arena *a, const char *data, size_t n)
+static mdit_str arena_copy_str(mdit_lib_ctx *lib, mdit_arena *a,
+                               const char *data, size_t n)
 {
     if (n == 0) return MDIT_STR_LIT("");
-    char *buf = (char *)mdit_arena_alloc(a, n);
+    char *buf = (char *)mdit_arena_alloc(lib, a, n);
     memcpy(buf, data, n);
     return (mdit_str){ buf, n };
 }
@@ -214,7 +215,7 @@ static bool block_code(mdit_state_block *state)
                                      4 + state->blkIndent, false, &raw);
     /* Append trailing '\n' to match upstream. */
     (void)mdit_buf_append_byte(&raw, '\n');
-    t->content = arena_copy_str(state->arena, raw.data, raw.len);
+    t->content = arena_copy_str(state->md->lib, state->arena, raw.data, raw.len);
     mdit_buf_destroy(&raw);
     mdit_token_set_map(t, startLine, state->line);
     return true;
@@ -285,15 +286,15 @@ static bool block_fence(mdit_state_block *state)
      * whitespace) on the token. The renderer is responsible for
      * unescaping and splitting/trimming it when deriving a class name. */
     if (params.len > 0) {
-        t->info = arena_copy_str(state->arena, params.data, params.len);
+        t->info = arena_copy_str(state->md->lib, state->arena, params.data, params.len);
     }
     mdit_buf raw;
     mdit_buf_init(&raw);
     (void)mdit_state_block_get_lines(state, startLine + 1, nextLine,
                                      outer_indent, true, &raw);
-    t->content = arena_copy_str(state->arena, raw.data, raw.len);
+    t->content = arena_copy_str(state->md->lib, state->arena, raw.data, raw.len);
     mdit_buf_destroy(&raw);
-    t->markup = arena_copy_str(state->arena, markup.data, markup.len);
+    t->markup = arena_copy_str(state->md->lib, state->arena, markup.data, markup.len);
     mdit_token_set_map(t, startLine, state->line);
     return true;
 }
@@ -330,7 +331,7 @@ static bool block_hr(mdit_state_block *state)
 
     /* markup = marker repeated (cnt + 1) times — matches upstream. */
     int32_t mlen = cnt + 1;
-    char *m = (char *)mdit_arena_alloc(state->arena, (size_t)mlen);
+    char *m = (char *)mdit_arena_alloc(state->md->lib, state->arena, (size_t)mlen);
     memset(m, marker, (size_t)mlen);
     t->markup = (mdit_str){ m, (size_t)mlen };
     return true;
@@ -371,9 +372,9 @@ static bool block_heading(mdit_state_block *state)
 
     /* tag = "h<level>", markup = "######"[:level]. */
     char tag_buf[3]; tag_buf[0] = 'h'; tag_buf[1] = (char)('0' + level); tag_buf[2] = 0;
-    mdit_str tag = arena_copy_str(state->arena, tag_buf, 2);
+    mdit_str tag = arena_copy_str(state->md->lib, state->arena, tag_buf, 2);
     char hashes[6] = { '#','#','#','#','#','#' };
-    mdit_str markup = arena_copy_str(state->arena, hashes, (size_t)level);
+    mdit_str markup = arena_copy_str(state->md->lib, state->arena, hashes, (size_t)level);
 
     mdit_token *open = mdit_state_block_push(state,
         MDIT_STR_LIT("heading_open"), tag, 1);
@@ -388,7 +389,7 @@ static bool block_heading(mdit_state_block *state)
         MDIT_STR_LIT("inline"), MDIT_STR_LIT(""), 0);
     if (inl == NULL) return false;
     if (content.len > 0) {
-        inl->content = arena_copy_str(state->arena, content.data, content.len);
+        inl->content = arena_copy_str(state->md->lib, state->arena, content.data, content.len);
     }
     mdit_token_set_map(inl, startLine, state->line);
     mdit_token_set_children_empty(inl);
@@ -474,15 +475,15 @@ static bool block_lheading(mdit_state_block *state)
                                      state->blkIndent, false, &raw);
     mdit_str body = str_strip((mdit_str){ raw.data ? raw.data : "", raw.len });
     mdit_str content = (body.len > 0)
-        ? arena_copy_str(state->arena, body.data, body.len)
+        ? arena_copy_str(state->md->lib, state->arena, body.data, body.len)
         : MDIT_STR_LIT("");
     mdit_buf_destroy(&raw);
 
     state->line = nextLine + 1;
 
     char tag_buf[3]; tag_buf[0] = 'h'; tag_buf[1] = (char)('0' + level); tag_buf[2] = 0;
-    mdit_str tag = arena_copy_str(state->arena, tag_buf, 2);
-    mdit_str markup = arena_copy_str(state->arena, &marker, 1);
+    mdit_str tag = arena_copy_str(state->md->lib, state->arena, tag_buf, 2);
+    mdit_str markup = arena_copy_str(state->md->lib, state->arena, &marker, 1);
 
     mdit_token *open = mdit_state_block_push(state,
         MDIT_STR_LIT("heading_open"), tag, 1);
@@ -649,7 +650,7 @@ static bool block_list(mdit_state_block *state)
         if (open == NULL) return false;
     }
     mdit_token_set_map(open, startLine, 0);
-    open->markup = arena_copy_str(state->arena, &marker_char, 1);
+    open->markup = arena_copy_str(state->md->lib, state->arena, &marker_char, 1);
 
     int32_t  nextLine          = startLine;
     bool     prev_empty_end    = false;
@@ -692,11 +693,11 @@ static bool block_list(mdit_state_block *state)
         mdit_token *li = mdit_state_block_push(state,
             MDIT_STR_LIT("list_item_open"), MDIT_STR_LIT("li"), 1);
         if (li == NULL) goto done;
-        li->markup = arena_copy_str(state->arena, &marker_char, 1);
+        li->markup = arena_copy_str(state->md->lib, state->arena, &marker_char, 1);
         size_t li_token_idx = state->tokens->len - 1;
         mdit_token_set_map(li, startLine, 0);
         if (is_ordered) {
-            li->info = arena_copy_str(state->arena,
+            li->info = arena_copy_str(state->md->lib, state->arena,
                 state->src.data + marker_start,
                 (size_t)(pos_after_marker - 1 - marker_start));
         }
@@ -760,7 +761,7 @@ static bool block_list(mdit_state_block *state)
         mdit_token *close = mdit_state_block_push(state,
             MDIT_STR_LIT("list_item_close"), MDIT_STR_LIT("li"), -1);
         if (close == NULL) goto done;
-        close->markup = arena_copy_str(state->arena, &marker_char, 1);
+        close->markup = arena_copy_str(state->md->lib, state->arena, &marker_char, 1);
 
         nextLine = startLine = state->line;
         /* Patch the list_item_open's map[1]. */
@@ -826,7 +827,7 @@ static bool block_list(mdit_state_block *state)
         is_ordered ? MDIT_STR_LIT("ol") : MDIT_STR_LIT("ul"),
         -1);
     if (close == NULL) goto done;
-    close->markup = arena_copy_str(state->arena, &marker_char, 1);
+    close->markup = arena_copy_str(state->md->lib, state->arena, &marker_char, 1);
 
     /* Patch list_open's map[1]. */
     state->tokens->data[list_tok_idx].map.end = nextLine;
@@ -888,10 +889,10 @@ static bool block_blockquote(mdit_state_block *state)
      * touch lines [startLine, nextLine), so a vec keyed by line offset
      * from startLine is enough. */
     mdit_vec_int32 oldB, oldBS, oldS, oldT;
-    mdit_vec_int32_init(&oldB,  state->arena);
-    mdit_vec_int32_init(&oldBS, state->arena);
-    mdit_vec_int32_init(&oldS,  state->arena);
-    mdit_vec_int32_init(&oldT,  state->arena);
+    mdit_vec_int32_init(&oldB,  state->md->lib, state->arena);
+    mdit_vec_int32_init(&oldBS, state->md->lib, state->arena);
+    mdit_vec_int32_init(&oldS,  state->md->lib, state->arena);
+    mdit_vec_int32_init(&oldT,  state->md->lib, state->arena);
 
     (void)mdit_vec_int32_push(&oldB, state->bMarks[startLine]);
     state->bMarks[startLine] = pos;
@@ -1047,7 +1048,7 @@ static bool block_blockquote(mdit_state_block *state)
          * form is just the original NOTE/TIP/.. ascii-lowercased; we
          * synthesise it inline from `kind_name`. */
         size_t prefix_len = sizeof "markdown-alert markdown-alert-" - 1;
-        char  *cls = (char *)mdit_arena_alloc(state->arena,
+        char  *cls = (char *)mdit_arena_alloc(state->md->lib, state->arena,
                                               prefix_len + kind_len);
         if (cls == NULL) goto restore;
         memcpy(cls, "markdown-alert markdown-alert-", prefix_len);
@@ -1057,7 +1058,7 @@ static bool block_blockquote(mdit_state_block *state)
             cls[prefix_len + i] = c;
         }
         mdit_str cls_str = { cls, prefix_len + kind_len };
-        mdit_str kind_str_upper = arena_copy_str(state->arena,
+        mdit_str kind_str_upper = arena_copy_str(state->md->lib, state->arena,
                                                  kind_name, kind_len);
 
         mdit_token *open = mdit_state_block_push(state,
@@ -1080,7 +1081,7 @@ static bool block_blockquote(mdit_state_block *state)
         mdit_token *t_inline = mdit_state_block_push(state,
             MDIT_STR_LIT("inline"), MDIT_STR_LIT(""), 0);
         if (t_inline == NULL) goto restore;
-        t_inline->content = arena_copy_str(state->arena,
+        t_inline->content = arena_copy_str(state->md->lib, state->arena,
                                            cap_name, strlen(cap_name));
         mdit_token_set_children_empty(t_inline);
 
@@ -1214,7 +1215,7 @@ static bool block_reference(mdit_state_block *state)
 
     mdit_link_destination_result dest;
     if (!mdit_parse_link_destination(
-            state->arena,
+            state->md->lib, state->arena,
             (mdit_str){ string.data ? string.data : "", maximum },
             p, maximum, &dest) || !dest.ok) {
         mdit_buf_destroy(&string);
@@ -1222,7 +1223,7 @@ static bool block_reference(mdit_state_block *state)
     }
 
     mdit_str href;
-    if (!mdit_normalize_link(state->arena, dest.str, &href) ||
+    if (!mdit_normalize_link(state->md->lib, state->arena, dest.str, &href) ||
         !mdit_validate_link(href)) {
         mdit_buf_destroy(&string);
         return false;
@@ -1248,7 +1249,7 @@ static bool block_reference(mdit_state_block *state)
 
     mdit_link_title_result titleRes;
     if (!mdit_parse_link_title(
-            state->arena,
+            state->md->lib, state->arena,
             (mdit_str){ string.data ? string.data : "", maximum },
             p, maximum, NULL, &titleRes)) {
         mdit_buf_destroy(&string);
@@ -1261,7 +1262,7 @@ static bool block_reference(mdit_state_block *state)
         ++nextLine;
         mdit_link_title_result cont;
         if (!mdit_parse_link_title(
-                state->arena,
+                state->md->lib, state->arena,
                 (mdit_str){ string.data ? string.data : "", maximum },
                 p, maximum, &titleRes, &cont)) {
             mdit_buf_destroy(&string);
@@ -1302,7 +1303,7 @@ static bool block_reference(mdit_state_block *state)
     }
 
     mdit_str label = mdit_env_normalize_reference(
-        state->arena,
+        state->md->lib, state->arena,
         (mdit_str){ string.data + 1, labelEnd - 1 });
     if (label.len == 0) {
         mdit_buf_destroy(&string);
@@ -1548,7 +1549,7 @@ static bool block_html_block(mdit_state_block *state)
     mdit_buf_init(&raw);
     (void)mdit_state_block_get_lines(state, startLine, nextLine,
                                      state->blkIndent, true, &raw);
-    t->content = arena_copy_str(state->arena, raw.data ? raw.data : "", raw.len);
+    t->content = arena_copy_str(state->md->lib, state->arena, raw.data ? raw.data : "", raw.len);
     mdit_buf_destroy(&raw);
     return true;
 }
@@ -1597,15 +1598,20 @@ static const char *table_align_style(table_align_t a)
 /* Typed dynamic vector of arena-borrowed string views, used to hold
  * table cells without leaning on mdit_buf for every split. */
 typedef struct table_cells {
-    mdit_str   *data;
-    size_t      len;
-    size_t      cap;
-    mdit_arena *arena;
+    mdit_str      *data;
+    size_t         len;
+    size_t         cap;
+    mdit_lib_ctx  *lib;
+    mdit_arena    *arena;
 } table_cells;
 
-static void table_cells_init(table_cells *c, mdit_arena *a)
+static void table_cells_init(table_cells *c, mdit_lib_ctx *lib, mdit_arena *a)
 {
-    c->data = NULL; c->len = 0; c->cap = 0; c->arena = a;
+    c->data = NULL;
+    c->len = 0;
+    c->cap = 0;
+    c->lib   = lib;
+    c->arena = a;
 }
 
 static bool table_cells_push(table_cells *c, mdit_str s)
@@ -1613,7 +1619,7 @@ static bool table_cells_push(table_cells *c, mdit_str s)
     if (c->len == c->cap) {
         size_t new_cap = (c->cap == 0) ? 8 : (c->cap * 2);
         mdit_str *next = (mdit_str *)mdit_arena_alloc(
-            c->arena, new_cap * sizeof *next);
+            c->lib, c->arena, new_cap * sizeof *next);
         if (c->len > 0 && c->data != NULL) {
             memcpy(next, c->data, c->len * sizeof *next);
         }
@@ -1628,8 +1634,8 @@ static bool table_cells_push(table_cells *c, mdit_str s)
  * `|`. Backslash escapes for `|` collapse to a literal `|` in the
  * cell content. The output cells are arena-owned copies; the caller
  * doesn't have to worry about lifetime. */
-static bool table_escaped_split(mdit_arena *arena, mdit_str line,
-                                table_cells *out)
+static bool table_escaped_split(mdit_lib_ctx *lib, mdit_arena *arena,
+                                mdit_str line, table_cells *out)
 {
     /* Worst case: one cell per byte. We accumulate into a scratch buf
      * then snapshot into the arena per cell. */
@@ -1649,7 +1655,7 @@ static bool table_escaped_split(mdit_arena *arena, mdit_str line,
                 }
                 mdit_str cell = MDIT_STR_LIT("");
                 if (cur.len > 0) {
-                    char *buf = (char *)mdit_arena_alloc(arena, cur.len);
+                    char *buf = (char *)mdit_arena_alloc(lib, arena, cur.len);
                     memcpy(buf, cur.data, cur.len);
                     cell.data = buf; cell.len = cur.len;
                 }
@@ -1678,7 +1684,7 @@ static bool table_escaped_split(mdit_arena *arena, mdit_str line,
         if (ok) {
             mdit_str cell = MDIT_STR_LIT("");
             if (cur.len > 0) {
-                char *buf = (char *)mdit_arena_alloc(arena, cur.len);
+                char *buf = (char *)mdit_arena_alloc(lib, arena, cur.len);
                 memcpy(buf, cur.data, cur.len);
                 cell.data = buf; cell.len = cur.len;
             }
@@ -1740,7 +1746,7 @@ static bool block_table(mdit_state_block *state)
     /* Divider row -> alignments via plain split('|'). */
     mdit_str divider_line = table_get_line(state, startLine + 1);
     table_cells divider;
-    table_cells_init(&divider, state->arena);
+    table_cells_init(&divider, state->md->lib, state->arena);
     /* Plain split on '|' (no escapes). */
     {
         size_t lp = 0;
@@ -1758,8 +1764,7 @@ static bool block_table(mdit_state_block *state)
     /* Walk divider cells, building the aligns array. */
     table_align_t *aligns = NULL;
     size_t aligns_len = 0;
-    aligns = (table_align_t *)mdit_arena_alloc(
-        state->arena, divider.len * sizeof *aligns);
+    aligns = (table_align_t *)mdit_arena_alloc(state->md->lib, state->arena, divider.len * sizeof *aligns);
     for (size_t i = 0; i < divider.len; ++i) {
         mdit_str t = str_strip(divider.data[i]);
         if (t.len == 0) {
@@ -1783,8 +1788,8 @@ static bool block_table(mdit_state_block *state)
     if (mdit_state_block_is_code_block(state, startLine)) return false;
 
     table_cells header;
-    table_cells_init(&header, state->arena);
-    if (!table_escaped_split(state->arena, header_line, &header)) return false;
+    table_cells_init(&header, state->md->lib, state->arena);
+    if (!table_escaped_split(state->md->lib, state->arena, header_line, &header)) return false;
     /* Drop leading empty cell. */
     size_t hstart = 0, hend = header.len;
     if (hend > hstart && header.data[hstart].len == 0) ++hstart;
@@ -1833,7 +1838,7 @@ static bool block_table(mdit_state_block *state)
         mdit_token_set_map(inl, startLine, startLine + 1);
         mdit_str cell = str_strip(header.data[hstart + i]);
         if (cell.len > 0) {
-            inl->content = arena_copy_str(state->arena, cell.data, cell.len);
+            inl->content = arena_copy_str(state->md->lib, state->arena, cell.data, cell.len);
         }
         mdit_token_set_children_empty(inl);
         mdit_token *th_close = mdit_state_block_push(state,
@@ -1877,8 +1882,8 @@ static bool block_table(mdit_state_block *state)
         if (mdit_state_block_is_code_block(state, nextLine)) break;
 
         table_cells row;
-        table_cells_init(&row, state->arena);
-        if (!table_escaped_split(state->arena, row_line, &row)) goto done_restore;
+        table_cells_init(&row, state->md->lib, state->arena);
+        if (!table_escaped_split(state->md->lib, state->arena, row_line, &row)) goto done_restore;
         size_t rstart = 0, rend = row.len;
         if (rend > rstart && row.data[rstart].len == 0) ++rstart;
         if (rend > rstart && row.data[rend - 1].len == 0) --rend;
@@ -1917,7 +1922,7 @@ static bool block_table(mdit_state_block *state)
             if (i < row_count) {
                 mdit_str cell = str_strip(row.data[rstart + i]);
                 if (cell.len > 0) {
-                    inl->content = arena_copy_str(state->arena,
+                    inl->content = arena_copy_str(state->md->lib, state->arena,
                                                   cell.data, cell.len);
                 }
             }
@@ -2026,7 +2031,7 @@ static bool block_paragraph(mdit_state_block *state)
     size_t content_len = hi - lo;
     char *content = NULL;
     if (content_len > 0) {
-        content = (char *)mdit_arena_alloc(state->arena, content_len);
+        content = (char *)mdit_arena_alloc(state->md->lib, state->arena, content_len);
         memcpy(content, s + lo, content_len);
     }
     mdit_buf_destroy(&raw);
@@ -2076,10 +2081,12 @@ static const mdit_str ALT_PR[] = {
     { "reference", 9 },
 };
 
-bool mdit_parser_block_init(mdit_parser_block *p, mdit_arena *arena)
+bool mdit_parser_block_init(mdit_parser_block *p, mdit_lib_ctx *lib,
+                            mdit_arena *arena)
 {
+    p->lib   = lib;
     p->arena = arena;
-    p->ruler = mdit_ruler_new(arena);
+    p->ruler = mdit_ruler_new(lib, arena);
     if (p->ruler == NULL) return false;
 
     typedef struct {

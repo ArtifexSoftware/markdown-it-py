@@ -16,11 +16,13 @@
  *     #include "arena.h"
  *
  *     MDIT_TEST(arena_alloc_basic) {
+ *         mdit_lib_ctx lib;
+ *         mdit_lib_ctx_init_defaults(&lib);
  *         mdit_arena a;
  *         mdit_arena_init(&a, 0);
- *         char *p = mdit_arena_alloc(&a, 32);
+ *         char *p = mdit_arena_alloc(&lib, &a, 32);
  *         MDIT_ASSERT_NE(p, NULL);
- *         mdit_arena_destroy(&a);
+ *         mdit_arena_destroy(&lib, &a);
  *     }
  *
  *     #include "mdit_test_main.h"

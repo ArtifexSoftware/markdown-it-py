@@ -37,6 +37,7 @@
 #include "arena.h"
 #include "json.h"
 #include "main.h"
+#include "mdit/mdit_lib_ctx.h"
 #include "ruler.h"
 #include "str.h"
 
@@ -281,12 +282,14 @@ int main(int argc, char **argv)
     int n_files = args.pos_last - args.pos_first;
     bool use_stdin = args.force_stdin || n_files == 0;
 
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena arena;
     mdit_arena_init(&arena, 0);
     mdit_md md;
-    if (!mdit_md_init(&md, &arena)) {
+    if (!mdit_md_init(&md, &lib, &arena)) {
         fprintf(stderr, MD_CLI_PROG_NAME ": failed to initialize parser.\n");
-        mdit_arena_destroy(&arena);
+        mdit_arena_destroy(&lib, &arena);
         return 2;
     }
 
@@ -336,6 +339,6 @@ int main(int argc, char **argv)
     }
 
     mdit_md_destroy(&md);
-    mdit_arena_destroy(&arena);
+    mdit_arena_destroy(&lib, &arena);
     return exit_code;
 }

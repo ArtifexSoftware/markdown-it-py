@@ -23,14 +23,16 @@
 #include "str.h"
 
 static int initialised = 0;
-static mdit_arena g_arena;
-static mdit_md    g_md;
+static mdit_lib_ctx g_lib;
+static mdit_arena   g_arena;
+static mdit_md      g_md;
 
 static void engine_init_once(void)
 {
     if (initialised) return;
+    mdit_lib_ctx_init_defaults(&g_lib);
     mdit_arena_init(&g_arena, 0);
-    if (!mdit_md_init(&g_md, &g_arena)) {
+    if (!mdit_md_init(&g_md, &g_lib, &g_arena)) {
         /* Initialisation failure is a hard build/config bug; not a
          * fuzz finding. Print and let the next call crash hard. */
         return;

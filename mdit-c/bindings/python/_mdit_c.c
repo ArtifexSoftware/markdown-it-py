@@ -56,6 +56,7 @@
 #include "env.h"
 #include "linkifier.h"
 #include "main.h"
+#include "mdit/mdit_lib_ctx.h"
 #include "parser_inline.h"
 #include "ruler.h"
 #include "state.h"
@@ -819,6 +820,7 @@ static PyObject *PyToken_from_mdit(const mdit_token *t)
 
 typedef struct {
     PyObject_HEAD
+    mdit_lib_ctx lib;
     mdit_arena arena;
     mdit_md    md;
     int        initialized;     /* 1 once mdit_md_init succeeded */
@@ -1046,7 +1048,7 @@ static int arena_dup_str(PyMarkdownIt *self, const char *s, size_t n,
         *out = (mdit_str){ "", 0 };
         return 0;
     }
-    char *buf = (char *)mdit_arena_alloc_aligned(&self->arena, n, 1);
+    char *buf = (char *)mdit_arena_alloc_aligned(&self->lib, &self->arena, n, 1);
     if (buf == NULL) {
         PyErr_NoMemory();
         return -1;
@@ -1396,9 +1398,10 @@ static int PyMarkdownIt_init(PyMarkdownIt *self, PyObject *args, PyObject *kwarg
     }
 
     if (!self->initialized) {
+        mdit_lib_ctx_init_defaults(&self->lib);
         mdit_arena_init(&self->arena, 0);
-        if (!mdit_md_init(&self->md, &self->arena)) {
-            mdit_arena_destroy(&self->arena);
+        if (!mdit_md_init(&self->md, &self->lib, &self->arena)) {
+            mdit_arena_destroy(&self->lib, &self->arena);
             PyErr_SetString(PyExc_RuntimeError, "mdit_md_init failed");
             return -1;
         }
@@ -1424,7 +1427,7 @@ static void PyMarkdownIt_dealloc(PyMarkdownIt *self)
     Py_CLEAR(self->options_dict);
     if (self->initialized) {
         mdit_md_destroy(&self->md);
-        mdit_arena_destroy(&self->arena);
+        mdit_arena_destroy(&self->lib, &self->arena);
         self->initialized = 0;
     }
     Py_TYPE(self)->tp_free((PyObject *)self);
@@ -1632,14 +1635,14 @@ static PyObject *do_render(PyMarkdownIt *self, PyObject *args,
     mdit_buf_init(&out);
     mdit_str src = { s, (size_t)n };
     mdit_env c_env;
-    mdit_env_init(&c_env, self->md.arena);
+    mdit_env_init(&c_env, self->md.lib, self->md.arena);
     /* Stash the user-supplied Python env so rule callbacks installed
      * via ``ruler.before/after/at/push`` see the same object the
      * caller passed in (instead of ``None``). The C engine doesn't
      * read this slot. */
     c_env.user = (env_obj == Py_None) ? NULL : env_obj;
     mdit_vec_token tokens;
-    mdit_vec_token_init(&tokens, self->md.arena);
+    mdit_vec_token_init(&tokens, self->md.lib, self->md.arena);
     bool parsed = inline_mode
         ? mdit_md_parse_inline(&self->md, src, &c_env, &tokens)
         : mdit_md_parse(&self->md, src, &c_env, &tokens);
@@ -1716,12 +1719,12 @@ static PyObject *do_parse(PyMarkdownIt *self, PyObject *args,
     if (sync_options_from_dict(self) < 0) return NULL;
 
     mdit_env c_env;
-    mdit_env_init(&c_env, self->md.arena);
+    mdit_env_init(&c_env, self->md.lib, self->md.arena);
     /* See do_render: stash the Python env object so rule callbacks
      * installed via the ruler see it instead of ``None``. */
     c_env.user = (env_obj == Py_None) ? NULL : env_obj;
     mdit_vec_token tokens;
-    mdit_vec_token_init(&tokens, &self->arena);
+    mdit_vec_token_init(&tokens, &self->lib, &self->arena);
     mdit_str src = { s, (size_t)n };
     bool parsed = inline_mode
         ? mdit_md_parse_inline(&self->md, src, &c_env, &tokens)
@@ -2437,18 +2440,19 @@ static PyTypeObject PyStateInline_Type = {
 /* ``tokens`` pay zero overhead for it.                                */
 /* ------------------------------------------------------------------ */
 
-static int py_token_apply_to_mdit(PyObject *src, mdit_arena *arena,
-                                  mdit_token *dst);
+static int py_token_apply_to_mdit(PyObject *src, mdit_lib_ctx *lib,
+                                  mdit_arena *arena, mdit_token *dst);
 
 /* Duplicate ``s`` into ``arena`` and return the new view. */
-static mdit_str arena_dup_mdit_str(mdit_arena *arena, mdit_str s)
+static mdit_str arena_dup_mdit_str(mdit_lib_ctx *lib, mdit_arena *arena,
+                                   mdit_str s)
 {
     mdit_str out = { NULL, 0 };
     if (s.len == 0) {
         out.data = "";
         return out;
     }
-    char *buf = (char *)mdit_arena_alloc_aligned(arena, s.len, 1);
+    char *buf = (char *)mdit_arena_alloc_aligned(lib, arena, s.len, 1);
     if (buf == NULL) return out;
     memcpy(buf, s.data, s.len);
     out.data = buf;
@@ -2458,8 +2462,8 @@ static mdit_str arena_dup_mdit_str(mdit_arena *arena, mdit_str s)
 
 /* PyUnicode -> arena-allocated mdit_str. Returns -1 (with a Python
  * exception set) on failure; 0 otherwise. */
-static int py_unicode_to_arena_str(PyObject *obj, mdit_arena *arena,
-                                   mdit_str *out)
+static int py_unicode_to_arena_str(PyObject *obj, mdit_lib_ctx *lib,
+                                   mdit_arena *arena, mdit_str *out)
 {
     if (obj == NULL || obj == Py_None) {
         out->data = "";
@@ -2475,7 +2479,7 @@ static int py_unicode_to_arena_str(PyObject *obj, mdit_arena *arena,
     const char *bytes = PyUnicode_AsUTF8AndSize(obj, &n);
     if (bytes == NULL) return -1;
     if (n == 0) { out->data = ""; out->len = 0; return 0; }
-    char *buf = (char *)mdit_arena_alloc_aligned(arena, (size_t)n, 1);
+    char *buf = (char *)mdit_arena_alloc_aligned(lib, arena, (size_t)n, 1);
     if (buf == NULL) { PyErr_NoMemory(); return -1; }
     memcpy(buf, bytes, (size_t)n);
     out->data = buf;
@@ -2485,7 +2489,7 @@ static int py_unicode_to_arena_str(PyObject *obj, mdit_arena *arena,
 
 /* Python value (str/int/float/bool/None) -> ``mdit_value``. The string
  * variant arena-duplicates so the value outlives the Python object. */
-static int py_value_to_mdit(PyObject *obj, mdit_arena *arena,
+static int py_value_to_mdit(PyObject *obj, mdit_lib_ctx *lib, mdit_arena *arena,
                             mdit_value *out)
 {
     if (obj == NULL || obj == Py_None) {
@@ -2508,7 +2512,7 @@ static int py_value_to_mdit(PyObject *obj, mdit_arena *arena,
     }
     if (PyUnicode_Check(obj)) {
         mdit_str s;
-        if (py_unicode_to_arena_str(obj, arena, &s) < 0) return -1;
+        if (py_unicode_to_arena_str(obj, lib, arena, &s) < 0) return -1;
         *out = mdit_value_str(s);
         return 0;
     }
@@ -2518,7 +2522,7 @@ static int py_value_to_mdit(PyObject *obj, mdit_arena *arena,
 }
 
 /* PyDict -> mdit_map (in-place; caller has already cleared/initialised). */
-static int py_dict_to_mdit_map(PyObject *dict, mdit_arena *arena,
+static int py_dict_to_mdit_map(PyObject *dict, mdit_lib_ctx *lib, mdit_arena *arena,
                                mdit_map *dst)
 {
     if (dict == NULL || dict == Py_None) return 0;
@@ -2532,9 +2536,9 @@ static int py_dict_to_mdit_map(PyObject *dict, mdit_arena *arena,
     PyObject *value = NULL;
     while (PyDict_Next(dict, &pos, &key, &value)) {
         mdit_str k;
-        if (py_unicode_to_arena_str(key, arena, &k) < 0) return -1;
+        if (py_unicode_to_arena_str(key, lib, arena, &k) < 0) return -1;
         mdit_value v;
-        if (py_value_to_mdit(value, arena, &v) < 0) return -1;
+        if (py_value_to_mdit(value, lib, arena, &v) < 0) return -1;
         if (!mdit_map_set(dst, k, v)) {
             PyErr_NoMemory();
             return -1;
@@ -2544,7 +2548,7 @@ static int py_dict_to_mdit_map(PyObject *dict, mdit_arena *arena,
 }
 
 /* Replace ``dst->children`` with the contents of the Python list. */
-static int py_list_to_child_array(PyObject *list, mdit_arena *arena,
+static int py_list_to_child_array(PyObject *list, mdit_lib_ctx *lib, mdit_arena *arena,
                                   mdit_token **out_arr,
                                   size_t *out_len, size_t *out_cap)
 {
@@ -2564,20 +2568,20 @@ static int py_list_to_child_array(PyObject *list, mdit_arena *arena,
         /* "explicit empty children" from "None". The vector code in */
         /* token.c uses (children != NULL && len == 0) for the */
         /* `[]` case (mdit_token_set_children_empty does the same). */
-        char *sentinel = (char *)mdit_arena_alloc_aligned(arena, 1, 1);
+        char *sentinel = (char *)mdit_arena_alloc_aligned(lib, arena, 1, 1);
         if (sentinel == NULL) { PyErr_NoMemory(); return -1; }
         *out_arr = (mdit_token *)sentinel;
         return 0;
     }
     mdit_token *arr = (mdit_token *)mdit_arena_alloc_aligned(
-        arena, (size_t)n * sizeof(mdit_token), _Alignof(mdit_token));
+        lib, arena, (size_t)n * sizeof(mdit_token), _Alignof(mdit_token));
     if (arr == NULL) { PyErr_NoMemory(); return -1; }
     for (Py_ssize_t i = 0; i < n; ++i) {
         PyObject *item = PySequence_GetItem(list, i);
         if (item == NULL) return -1;
         memset(&arr[i], 0, sizeof(mdit_token));
-        mdit_token_init(&arr[i], arena, MDIT_STR_LIT(""), MDIT_STR_LIT(""), 0);
-        int rc = py_token_apply_to_mdit(item, arena, &arr[i]);
+        mdit_token_init(&arr[i], lib, arena, MDIT_STR_LIT(""), MDIT_STR_LIT(""), 0);
+        int rc = py_token_apply_to_mdit(item, lib, arena, &arr[i]);
         Py_DECREF(item);
         if (rc < 0) return -1;
     }
@@ -2590,8 +2594,8 @@ static int py_list_to_child_array(PyObject *list, mdit_arena *arena,
 /* Apply ``src`` (PyToken or anything quacking like one) onto ``dst``,
  * which has been freshly initialised. Allocates strings/maps/children
  * into ``arena``. Returns -1 with a Python exception on failure. */
-static int py_token_apply_to_mdit(PyObject *src, mdit_arena *arena,
-                                  mdit_token *dst)
+static int py_token_apply_to_mdit(PyObject *src, mdit_lib_ctx *lib,
+                                  mdit_arena *arena, mdit_token *dst)
 {
     if (src == NULL) {
         PyErr_SetString(PyExc_TypeError, "expected Token, got NULL");
@@ -2621,11 +2625,11 @@ static int py_token_apply_to_mdit(PyObject *src, mdit_arena *arena,
     if (PyErr_Occurred()) goto fail;
 
     mdit_str s;
-    if (type    != NULL) { CHECK(py_unicode_to_arena_str(type,    arena, &s)); dst->type    = s; }
-    if (tag     != NULL) { CHECK(py_unicode_to_arena_str(tag,     arena, &s)); dst->tag     = s; }
-    if (content != NULL) { CHECK(py_unicode_to_arena_str(content, arena, &s)); dst->content = s; }
-    if (markup  != NULL) { CHECK(py_unicode_to_arena_str(markup,  arena, &s)); dst->markup  = s; }
-    if (info    != NULL) { CHECK(py_unicode_to_arena_str(info,    arena, &s)); dst->info    = s; }
+    if (type    != NULL) { CHECK(py_unicode_to_arena_str(type,    lib, arena, &s)); dst->type    = s; }
+    if (tag     != NULL) { CHECK(py_unicode_to_arena_str(tag,     lib, arena, &s)); dst->tag     = s; }
+    if (content != NULL) { CHECK(py_unicode_to_arena_str(content, lib, arena, &s)); dst->content = s; }
+    if (markup  != NULL) { CHECK(py_unicode_to_arena_str(markup,  lib, arena, &s)); dst->markup  = s; }
+    if (info    != NULL) { CHECK(py_unicode_to_arena_str(info,    lib, arena, &s)); dst->info    = s; }
 
     if (nesting != NULL) {
         long v = PyLong_AsLong(nesting);
@@ -2671,11 +2675,11 @@ static int py_token_apply_to_mdit(PyObject *src, mdit_arena *arena,
      * refill from the Python dicts. */
     if (attrs != NULL) {
         mdit_map_clear(&dst->attrs);
-        CHECK(py_dict_to_mdit_map(attrs, arena, &dst->attrs));
+        CHECK(py_dict_to_mdit_map(attrs, lib, arena, &dst->attrs));
     }
     if (meta != NULL) {
         mdit_map_clear(&dst->meta);
-        CHECK(py_dict_to_mdit_map(meta, arena, &dst->meta));
+        CHECK(py_dict_to_mdit_map(meta, lib, arena, &dst->meta));
     }
 
     /* children — None | sequence of Tokens. Always rebuild from the
@@ -2683,7 +2687,7 @@ static int py_token_apply_to_mdit(PyObject *src, mdit_arena *arena,
     {
         mdit_token *child_arr;
         size_t child_len, child_cap;
-        CHECK(py_list_to_child_array(children, arena,
+        CHECK(py_list_to_child_array(children, lib, arena,
                                      &child_arr, &child_len, &child_cap));
         dst->children     = child_arr;
         dst->children_len = child_len;
@@ -2738,7 +2742,7 @@ static PyObject *children_to_py_list(const mdit_token *parent)
 }
 
 /* Replace ``dst``'s contents with the Tokens in ``list``. */
-static int py_list_to_vec(PyObject *list, mdit_arena *arena,
+static int py_list_to_vec(PyObject *list, mdit_lib_ctx *lib, mdit_arena *arena,
                           mdit_vec_token *dst)
 {
     if (list == NULL || !PyList_Check(list)) {
@@ -2756,14 +2760,14 @@ static int py_list_to_vec(PyObject *list, mdit_arena *arena,
         mdit_token *slot = mdit_vec_token_emplace(dst);
         if (slot == NULL) { PyErr_NoMemory(); return -1; }
         memset(slot, 0, sizeof(*slot));
-        mdit_token_init(slot, arena, MDIT_STR_LIT(""), MDIT_STR_LIT(""), 0);
-        if (py_token_apply_to_mdit(item, arena, slot) < 0) return -1;
+        mdit_token_init(slot, lib, arena, MDIT_STR_LIT(""), MDIT_STR_LIT(""), 0);
+        if (py_token_apply_to_mdit(item, lib, arena, slot) < 0) return -1;
     }
     return 0;
 }
 
 /* Replace ``parent->children`` with the Tokens in ``list``. */
-static int py_list_to_token_children(PyObject *list, mdit_arena *arena,
+static int py_list_to_token_children(PyObject *list, mdit_lib_ctx *lib, mdit_arena *arena,
                                      mdit_token *parent)
 {
     if (list == NULL || !PyList_Check(list)) {
@@ -2772,7 +2776,7 @@ static int py_list_to_token_children(PyObject *list, mdit_arena *arena,
     }
     mdit_token *child_arr;
     size_t child_len, child_cap;
-    if (py_list_to_child_array(list, arena, &child_arr,
+    if (py_list_to_child_array(list, lib, arena, &child_arr,
                                &child_len, &child_cap) < 0) {
         return -1;
     }
@@ -2866,19 +2870,19 @@ static int py_state_writeback_tokens(PyObject *st)
         PyStateCore *s = (PyStateCore *)st;
         if (s->tokens_cache == NULL || s->cstate == NULL) return 0;
         mdit_state_core *cs = (mdit_state_core *)s->cstate;
-        return py_list_to_vec(s->tokens_cache, cs->arena, cs->tokens);
+        return py_list_to_vec(s->tokens_cache, cs->md->lib, cs->arena, cs->tokens);
     }
     if (Py_TYPE(st) == &PyStateBlock_Type) {
         PyStateBlock *s = (PyStateBlock *)st;
         if (s->tokens_cache == NULL || s->cstate == NULL) return 0;
         mdit_state_block *cs = (mdit_state_block *)s->cstate;
-        return py_list_to_vec(s->tokens_cache, cs->arena, cs->tokens);
+        return py_list_to_vec(s->tokens_cache, cs->md->lib, cs->arena, cs->tokens);
     }
     if (Py_TYPE(st) == &PyStateInline_Type) {
         PyStateInline *s = (PyStateInline *)st;
         if (s->tokens_cache == NULL || s->cstate == NULL) return 0;
         mdit_state_inline *cs = (mdit_state_inline *)s->cstate;
-        return py_list_to_token_children(s->tokens_cache, cs->arena,
+        return py_list_to_token_children(s->tokens_cache, cs->md->lib, cs->arena,
                                          cs->parent);
     }
     return 0;
@@ -3213,7 +3217,7 @@ static PyRuleEntry *make_rule_entry(PyMarkdownIt *self, PyObject *callback,
                                     int kind)
 {
     PyRuleEntry *e = (PyRuleEntry *)mdit_arena_alloc(
-        &self->arena, sizeof(PyRuleEntry));
+        &self->lib, &self->arena, sizeof(PyRuleEntry));
     if (e == NULL) return NULL;
     e->callback = callback;   /* borrowed; lives on rule_callbacks */
     e->md       = self;
@@ -3237,7 +3241,7 @@ static int build_alt_chains(PyMarkdownIt *self, PyObject *alt_obj,
     Py_ssize_t n = PySequence_Fast_GET_SIZE(seq);
     if (n == 0) { Py_DECREF(seq); return 0; }
     mdit_str *arr = (mdit_str *)mdit_arena_alloc_aligned(
-        &self->arena, (size_t)n * sizeof(mdit_str), _Alignof(mdit_str));
+        &self->lib, &self->arena, (size_t)n * sizeof(mdit_str), _Alignof(mdit_str));
     if (arr == NULL) {
         Py_DECREF(seq);
         PyErr_NoMemory();

@@ -13,24 +13,26 @@ MDIT_VEC_DEFINE(token, mdit_token)
 /* ---------------------------------------------------------------------
  * Construction
  * ------------------------------------------------------------------- */
-void mdit_token_init(mdit_token *t, mdit_arena *arena,
+void mdit_token_init(mdit_token *t, mdit_lib_ctx *lib, mdit_arena *arena,
                      mdit_str type, mdit_str tag, int8_t nesting)
 {
     memset(t, 0, sizeof *t);
     t->type    = type;
     t->tag     = tag;
     t->nesting = nesting;
+    t->lib     = lib;
     t->arena   = arena;
     /* attrs / meta start empty; lazy-init the storage on first set. */
-    mdit_map_init(&t->attrs, arena);
-    mdit_map_init(&t->meta,  arena);
+    mdit_map_init(&t->attrs, lib, arena);
+    mdit_map_init(&t->meta, lib, arena);
 }
 
-mdit_token *mdit_token_new(mdit_arena *arena,
+mdit_token *mdit_token_new(mdit_lib_ctx *lib, mdit_arena *arena,
                            mdit_str type, mdit_str tag, int8_t nesting)
 {
-    mdit_token *t = (mdit_token *)mdit_arena_alloc(arena, sizeof(mdit_token));
-    mdit_token_init(t, arena, type, tag, nesting);
+    mdit_token *t =
+        (mdit_token *)mdit_arena_alloc(lib, arena, sizeof(mdit_token));
+    mdit_token_init(t, lib, arena, type, tag, nesting);
     return t;
 }
 
@@ -93,7 +95,7 @@ bool mdit_token_attr_join(mdit_token *t, mdit_str key, mdit_str value)
     }
     /* Concatenate ``existing.s + ' ' + value`` into a fresh arena slot. */
     size_t total = existing->u.s.len + 1 + value.len;
-    char *buf = (char *)mdit_arena_alloc(t->arena, total);
+    char *buf = (char *)mdit_arena_alloc(t->lib, t->arena, total);
     memcpy(buf, existing->u.s.data, existing->u.s.len);
     buf[existing->u.s.len] = ' ';
     memcpy(buf + existing->u.s.len + 1, value.data, value.len);
@@ -112,21 +114,21 @@ static bool grow_children(mdit_token *t, size_t want_cap)
     size_t bytes = cap * sizeof(mdit_token);
 
     if (t->children == NULL) {
-        t->children = (mdit_token *)mdit_arena_alloc(t->arena, bytes);
+        t->children = (mdit_token *)mdit_arena_alloc(t->lib, t->arena, bytes);
         t->children_cap = cap;
         return true;
     }
     /* Try to extend in place at the arena tail. */
     size_t old_bytes = t->children_cap * sizeof(mdit_token);
     void *p = t->children;
-    if (mdit_arena_try_extend(t->arena, &p, old_bytes, bytes)) {
+    if (mdit_arena_try_extend(t->lib, t->arena, &p, old_bytes, bytes)) {
         t->children     = (mdit_token *)p;
         t->children_cap = cap;
         return true;
     }
     /* Otherwise, allocate fresh and copy. The previous slab is leaked
      * into the arena until reset(). */
-    mdit_token *fresh = (mdit_token *)mdit_arena_alloc(t->arena, bytes);
+    mdit_token *fresh = (mdit_token *)mdit_arena_alloc(t->lib, t->arena, bytes);
     if (t->children_len > 0) {
         memcpy(fresh, t->children, t->children_len * sizeof(mdit_token));
     }
@@ -142,7 +144,7 @@ mdit_token *mdit_token_push_child(mdit_token *t,
         if (!grow_children(t, t->children_len + 1)) return NULL;
     }
     mdit_token *slot = &t->children[t->children_len++];
-    mdit_token_init(slot, t->arena, type, tag, nesting);
+    mdit_token_init(slot, t->lib, t->arena, type, tag, nesting);
     return slot;
 }
 

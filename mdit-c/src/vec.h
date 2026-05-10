@@ -29,6 +29,7 @@
 #include <string.h>
 
 #include "arena.h"
+#include "mdit/mdit_lib_ctx.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -52,11 +53,12 @@ static inline size_t mdit_vec_grow(size_t cap, size_t at_least)
  * Generic shim: typed wrappers reuse a single byte-oriented core.
  * ------------------------------------------------------------------- */
 typedef struct mdit_vec_core {
-    void       *data;
-    size_t      len;
-    size_t      cap;
-    mdit_arena *arena;   /* NULL = malloc-backed */
-    size_t      elem;    /* element size, in bytes */
+    void            *data;
+    size_t           len;
+    size_t           cap;
+    mdit_lib_ctx    *lib;    /* required when arena != NULL */
+    mdit_arena      *arena;   /* NULL = malloc-backed */
+    size_t           elem;    /* element size, in bytes */
 } mdit_vec_core;
 
 void *mdit_vec_core_reserve(mdit_vec_core *v, size_t want_cap);
@@ -73,14 +75,16 @@ void  mdit_vec_core_destroy(mdit_vec_core *v);
  * ------------------------------------------------------------------- */
 #define MDIT_VEC_DECLARE(NAME, TYPE)                                       \
     typedef struct mdit_vec_##NAME {                                       \
-        TYPE       *data;                                                  \
-        size_t      len;                                                   \
-        size_t      cap;                                                   \
-        mdit_arena *arena;                                                 \
-        size_t      elem;                                                  \
+        TYPE           *data;                                              \
+        size_t          len;                                               \
+        size_t          cap;                                               \
+        mdit_lib_ctx   *lib;                                               \
+        mdit_arena     *arena;                                             \
+        size_t          elem;                                              \
     } mdit_vec_##NAME;                                                     \
                                                                            \
     void  mdit_vec_##NAME##_init        (mdit_vec_##NAME *v,               \
+                                         mdit_lib_ctx *lib,                \
                                          mdit_arena *arena);               \
     void  mdit_vec_##NAME##_destroy     (mdit_vec_##NAME *v);              \
     void  mdit_vec_##NAME##_clear       (mdit_vec_##NAME *v);              \
@@ -96,11 +100,13 @@ void  mdit_vec_core_destroy(mdit_vec_core *v);
     /* end of MDIT_VEC_DECLARE */
 
 #define MDIT_VEC_DEFINE(NAME, TYPE)                                        \
-    void mdit_vec_##NAME##_init(mdit_vec_##NAME *v, mdit_arena *arena)     \
+    void mdit_vec_##NAME##_init(mdit_vec_##NAME *v, mdit_lib_ctx *lib,     \
+                                mdit_arena *arena)                         \
     {                                                                      \
         v->data  = NULL;                                                   \
         v->len   = 0;                                                      \
         v->cap   = 0;                                                      \
+        v->lib   = lib;                                                    \
         v->arena = arena;                                                  \
         v->elem  = sizeof(TYPE);                                           \
     }                                                                      \
@@ -111,6 +117,7 @@ void  mdit_vec_core_destroy(mdit_vec_core *v);
         core.data  = v->data;                                              \
         core.len   = v->len;                                               \
         core.cap   = v->cap;                                               \
+        core.lib   = v->lib;                                               \
         core.arena = v->arena;                                             \
         core.elem  = sizeof(TYPE);                                         \
         mdit_vec_core_destroy(&core);                                      \
@@ -129,6 +136,7 @@ void  mdit_vec_core_destroy(mdit_vec_core *v);
         core.data  = v->data;                                              \
         core.len   = v->len;                                               \
         core.cap   = v->cap;                                               \
+        core.lib   = v->lib;                                               \
         core.arena = v->arena;                                             \
         core.elem  = sizeof(TYPE);                                         \
         void *r = mdit_vec_core_reserve(&core, cap);                       \

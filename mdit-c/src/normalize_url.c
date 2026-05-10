@@ -6,10 +6,11 @@
 #include "punycode.h"
 #include "url.h"
 
-static mdit_str arena_copy(mdit_arena *arena, const char *data, size_t len)
+static mdit_str arena_copy(mdit_lib_ctx *lib, mdit_arena *arena,
+                           const char *data, size_t len)
 {
     if (len == 0) return MDIT_STR_LIT("");
-    char *buf = (char *)mdit_arena_alloc(arena, len);
+    char *buf = (char *)mdit_arena_alloc(lib, arena, len);
     memcpy(buf, data, len);
     return (mdit_str){ buf, len };
 }
@@ -61,14 +62,15 @@ static bool should_idn(const mdit_url *parsed)
            mdit_str_eq_ci(parsed->protocol, "mailto:");
 }
 
-bool mdit_normalize_link(mdit_arena *arena, mdit_str url, mdit_str *out)
+bool mdit_normalize_link(mdit_lib_ctx *lib, mdit_arena *arena,
+                         mdit_str url, mdit_str *out)
 {
     mdit_url parsed;
-    if (!mdit_url_parse(arena, url, true, &parsed)) return false;
+    if (!mdit_url_parse(lib, arena, url, true, &parsed)) return false;
 
     if (should_idn(&parsed)) {
         mdit_str ascii_host;
-        if (mdit_idn_to_ascii(arena, parsed.hostname, &ascii_host)) {
+        if (mdit_idn_to_ascii(lib, arena, parsed.hostname, &ascii_host)) {
             parsed.hostname = ascii_host;
         }
         /* On failure (OOM only, in practice), keep the original
@@ -87,20 +89,24 @@ bool mdit_normalize_link(mdit_arena *arena, mdit_str url, mdit_str *out)
             true,
             &encoded);
     }
-    if (ok) *out = arena_copy(arena, encoded.data ? encoded.data : "", encoded.len);
+    if (ok) {
+        *out = arena_copy(lib, arena, encoded.data ? encoded.data : "",
+                          encoded.len);
+    }
     mdit_buf_destroy(&encoded);
     mdit_buf_destroy(&formatted);
     return ok;
 }
 
-bool mdit_normalize_link_text(mdit_arena *arena, mdit_str url, mdit_str *out)
+bool mdit_normalize_link_text(mdit_lib_ctx *lib, mdit_arena *arena,
+                              mdit_str url, mdit_str *out)
 {
     mdit_url parsed;
-    if (!mdit_url_parse(arena, url, true, &parsed)) return false;
+    if (!mdit_url_parse(lib, arena, url, true, &parsed)) return false;
 
     if (should_idn(&parsed)) {
         mdit_str unicode_host;
-        if (mdit_idn_to_unicode(arena, parsed.hostname, &unicode_host)) {
+        if (mdit_idn_to_unicode(lib, arena, parsed.hostname, &unicode_host)) {
             parsed.hostname = unicode_host;
         }
     }
@@ -116,7 +122,10 @@ bool mdit_normalize_link_text(mdit_arena *arena, mdit_str url, mdit_str *out)
             MDIT_URL_DECODE_DEFAULT_CHARS "%",
             &decoded);
     }
-    if (ok) *out = arena_copy(arena, decoded.data ? decoded.data : "", decoded.len);
+    if (ok) {
+        *out = arena_copy(lib, arena, decoded.data ? decoded.data : "",
+                          decoded.len);
+    }
     mdit_buf_destroy(&decoded);
     mdit_buf_destroy(&formatted);
     return ok;

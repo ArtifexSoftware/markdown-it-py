@@ -7,17 +7,18 @@
 
 #include "env.h"
 
-bool mdit_md_init(mdit_md *md, mdit_arena *arena)
+bool mdit_md_init(mdit_md *md, mdit_lib_ctx *lib, mdit_arena *arena)
 {
     memset(md, 0, sizeof *md);
+    md->lib   = lib;
     md->arena = arena;
     mdit_options defaults = MDIT_OPTIONS_DEFAULTS;
     md->options = defaults;
 
-    if (!mdit_parser_core_init(&md->core, arena))   return false;
-    if (!mdit_parser_block_init(&md->block, arena)) return false;
-    if (!mdit_parser_inline_init(&md->inline_p, arena)) return false;
-    md->renderer = mdit_renderer_new(arena);
+    if (!mdit_parser_core_init(&md->core, lib, arena))   return false;
+    if (!mdit_parser_block_init(&md->block, lib, arena)) return false;
+    if (!mdit_parser_inline_init(&md->inline_p, lib, arena)) return false;
+    md->renderer = mdit_renderer_new(lib, arena);
     if (md->renderer == NULL) return false;
     return true;
 }
@@ -42,7 +43,7 @@ static bool mdit_md_parse_impl(mdit_md *md, mdit_str src, void *env,
 {
     mdit_env auto_env;
     if (env == NULL) {
-        mdit_env_init(&auto_env, md->arena);
+        mdit_env_init(&auto_env, md->lib, md->arena);
         env = &auto_env;
     }
     mdit_state_core state;
@@ -69,11 +70,11 @@ static bool mdit_md_render_impl(mdit_md *md, mdit_str src, void *env,
 {
     mdit_env auto_env;
     if (env == NULL) {
-        mdit_env_init(&auto_env, md->arena);
+        mdit_env_init(&auto_env, md->lib, md->arena);
         env = &auto_env;
     }
     mdit_vec_token tokens;
-    mdit_vec_token_init(&tokens, md->arena);
+    mdit_vec_token_init(&tokens, md->lib, md->arena);
     if (!mdit_md_parse_impl(md, src, env, &tokens, inline_mode)) {
         mdit_vec_token_destroy(&tokens);
         return false;

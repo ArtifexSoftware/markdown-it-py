@@ -18,14 +18,16 @@
 #include "token.h"
 
 static int initialised = 0;
-static mdit_arena g_arena;
-static mdit_md    g_md;
+static mdit_lib_ctx g_lib;
+static mdit_arena   g_arena;
+static mdit_md      g_md;
 
 static void engine_init_once(void)
 {
     if (initialised) return;
+    mdit_lib_ctx_init_defaults(&g_lib);
     mdit_arena_init(&g_arena, 0);
-    if (!mdit_md_init(&g_md, &g_arena)) return;
+    if (!mdit_md_init(&g_md, &g_lib, &g_arena)) return;
     initialised = 1;
 }
 
@@ -36,7 +38,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
     mdit_str src = { (const char *)data, size };
     mdit_vec_token tokens;
-    mdit_vec_token_init(&tokens, g_md.arena);
+    mdit_vec_token_init(&tokens, &g_lib, &g_arena);
     if (!mdit_md_parse(&g_md, src, NULL, &tokens)) {
         mdit_vec_token_destroy(&tokens);
         return 0;

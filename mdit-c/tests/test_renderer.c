@@ -13,6 +13,7 @@
 
 #include "arena.h"
 #include "escape.h"
+#include "mdit/mdit_lib_ctx.h"
 #include "json.h"
 #include "map.h"
 #include "renderer.h"
@@ -25,14 +26,16 @@ static void render_seq(const mdit_token *tokens, size_t n,
                        const mdit_renderer_options *opts,
                        mdit_buf *out)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
-    mdit_renderer *r = mdit_renderer_new(&a);
+    mdit_renderer *r = mdit_renderer_new(&lib, &a);
     if (!mdit_renderer_render(r, tokens, n, opts, NULL, out)) {
-        mdit_arena_destroy(&a);
+        mdit_arena_destroy(&lib, &a);
         mdit_test_fail(__FILE__, __LINE__, "render: OOM");
     }
     mdit_renderer_destroy(r);
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 static void check_render(const mdit_token *tokens, size_t n,
@@ -57,138 +60,160 @@ static void check_render(const mdit_token *tokens, size_t n,
  * ------------------------------------------------------------------- */
 MDIT_TEST(renderer_paragraph_with_text)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
 
     mdit_token tokens[3];
-    mdit_token_init(&tokens[0], &a,
+    mdit_token_init(&tokens[0], &lib, &a,
         MDIT_STR_LIT("paragraph_open"), MDIT_STR_LIT("p"), 1);
     tokens[0].block = true;
-    mdit_token_init(&tokens[1], &a,
+    mdit_token_init(&tokens[1], &lib, &a,
         MDIT_STR_LIT("inline"), MDIT_STR_LIT(""), 0);
     tokens[1].block = true;
     /* one text child */
     mdit_token *child = mdit_token_push_child(&tokens[1],
         MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
     mdit_token_set_content(child, MDIT_STR_LIT("hello world"));
-    mdit_token_init(&tokens[2], &a,
+    mdit_token_init(&tokens[2], &lib, &a,
         MDIT_STR_LIT("paragraph_close"), MDIT_STR_LIT("p"), -1);
     tokens[2].block = true;
 
     mdit_renderer_options opts = MDIT_RENDERER_OPTIONS_DEFAULTS;
     check_render(tokens, 3, &opts, "<p>hello world</p>\n");
 
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(renderer_text_escapes_html)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_token t;
-    mdit_token_init(&t, &a, MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
+    mdit_token_init(&t, &lib, &a, MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
     mdit_token_set_content(&t, MDIT_STR_LIT("<a> & \"q\""));
     mdit_renderer_options opts = MDIT_RENDERER_OPTIONS_DEFAULTS;
     check_render(&t, 1, &opts, "&lt;a&gt; &amp; &quot;q&quot;");
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(renderer_code_inline_escapes_content)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_token t;
-    mdit_token_init(&t, &a, MDIT_STR_LIT("code_inline"), MDIT_STR_LIT("code"), 0);
+    mdit_token_init(&t, &lib, &a, MDIT_STR_LIT("code_inline"), MDIT_STR_LIT("code"), 0);
     mdit_token_set_content(&t, MDIT_STR_LIT("a < b && c > d"));
     mdit_renderer_options opts = MDIT_RENDERER_OPTIONS_DEFAULTS;
     check_render(&t, 1, &opts,
                  "<code>a &lt; b &amp;&amp; c &gt; d</code>");
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(renderer_code_block_emits_pre_code)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_token t;
-    mdit_token_init(&t, &a, MDIT_STR_LIT("code_block"), MDIT_STR_LIT("code"), 0);
+    mdit_token_init(&t, &lib, &a, MDIT_STR_LIT("code_block"), MDIT_STR_LIT("code"), 0);
     mdit_token_set_content(&t, MDIT_STR_LIT("foo\n"));
     mdit_renderer_options opts = MDIT_RENDERER_OPTIONS_DEFAULTS;
     check_render(&t, 1, &opts, "<pre><code>foo\n</code></pre>\n");
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(renderer_fence_with_lang)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_token t;
-    mdit_token_init(&t, &a, MDIT_STR_LIT("fence"), MDIT_STR_LIT("code"), 0);
+    mdit_token_init(&t, &lib, &a, MDIT_STR_LIT("fence"), MDIT_STR_LIT("code"), 0);
     mdit_token_set_info(&t, MDIT_STR_LIT("python"));
     mdit_token_set_content(&t, MDIT_STR_LIT("print(1)\n"));
     mdit_renderer_options opts = MDIT_RENDERER_OPTIONS_DEFAULTS;
     check_render(&t, 1, &opts,
         "<pre><code class=\"language-python\">print(1)\n</code></pre>\n");
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(renderer_fence_no_lang)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_token t;
-    mdit_token_init(&t, &a, MDIT_STR_LIT("fence"), MDIT_STR_LIT("code"), 0);
+    mdit_token_init(&t, &lib, &a, MDIT_STR_LIT("fence"), MDIT_STR_LIT("code"), 0);
     mdit_token_set_content(&t, MDIT_STR_LIT("plain\n"));
     mdit_renderer_options opts = MDIT_RENDERER_OPTIONS_DEFAULTS;
     check_render(&t, 1, &opts, "<pre><code>plain\n</code></pre>\n");
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(renderer_softbreak_default_is_newline)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_token t;
-    mdit_token_init(&t, &a, MDIT_STR_LIT("softbreak"), MDIT_STR_LIT(""), 0);
+    mdit_token_init(&t, &lib, &a, MDIT_STR_LIT("softbreak"), MDIT_STR_LIT(""), 0);
     mdit_renderer_options opts = MDIT_RENDERER_OPTIONS_DEFAULTS;
     check_render(&t, 1, &opts, "\n");
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(renderer_softbreak_with_breaks_emits_br)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_token t;
-    mdit_token_init(&t, &a, MDIT_STR_LIT("softbreak"), MDIT_STR_LIT(""), 0);
+    mdit_token_init(&t, &lib, &a, MDIT_STR_LIT("softbreak"), MDIT_STR_LIT(""), 0);
     mdit_renderer_options opts = MDIT_RENDERER_OPTIONS_DEFAULTS;
     opts.breaks = true;
     check_render(&t, 1, &opts, "<br>\n");
     opts.xhtmlOut = true;
     check_render(&t, 1, &opts, "<br />\n");
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(renderer_hardbreak)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_token t;
-    mdit_token_init(&t, &a, MDIT_STR_LIT("hardbreak"), MDIT_STR_LIT("br"), 0);
+    mdit_token_init(&t, &lib, &a, MDIT_STR_LIT("hardbreak"), MDIT_STR_LIT("br"), 0);
     mdit_renderer_options opts = MDIT_RENDERER_OPTIONS_DEFAULTS;
     check_render(&t, 1, &opts, "<br>\n");
     opts.xhtmlOut = true;
     check_render(&t, 1, &opts, "<br />\n");
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(renderer_html_block_passes_through)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_token t;
-    mdit_token_init(&t, &a, MDIT_STR_LIT("html_block"), MDIT_STR_LIT(""), 0);
+    mdit_token_init(&t, &lib, &a, MDIT_STR_LIT("html_block"), MDIT_STR_LIT(""), 0);
     mdit_token_set_content(&t, MDIT_STR_LIT("<div>raw</div>\n"));
     mdit_renderer_options opts = MDIT_RENDERER_OPTIONS_DEFAULTS;
     check_render(&t, 1, &opts, "<div>raw</div>\n");
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(renderer_image_uses_inline_as_text_for_alt)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_token img;
-    mdit_token_init(&img, &a,
+    mdit_token_init(&img, &lib, &a,
         MDIT_STR_LIT("image"), MDIT_STR_LIT("img"), 0);
     mdit_token_attr_set_z(&img, "src", mdit_value_cstr("/x.png"));
     mdit_token_attr_set_z(&img, "alt", mdit_value_cstr(""));
@@ -203,20 +228,22 @@ MDIT_TEST(renderer_image_uses_inline_as_text_for_alt)
     opts.xhtmlOut = true;
     check_render(&img, 1, &opts, "<img src=\"/x.png\" alt=\"a &lt; b\" />");
 
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(renderer_renderToken_self_closing_xhtml)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_token hr;
-    mdit_token_init(&hr, &a, MDIT_STR_LIT("hr"), MDIT_STR_LIT("hr"), 0);
+    mdit_token_init(&hr, &lib, &a, MDIT_STR_LIT("hr"), MDIT_STR_LIT("hr"), 0);
     hr.block = true;
     mdit_renderer_options opts = MDIT_RENDERER_OPTIONS_DEFAULTS;
     check_render(&hr, 1, &opts, "<hr>\n");
     opts.xhtmlOut = true;
     check_render(&hr, 1, &opts, "<hr />\n");
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 /* File-scope custom rule: wraps text content in <span>...</span>. */
@@ -233,13 +260,15 @@ static bool custom_text_rule(mdit_renderer *rr,
 
 MDIT_TEST(renderer_custom_rule_replaces_default)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
-    mdit_renderer *r = mdit_renderer_new(&a);
+    mdit_renderer *r = mdit_renderer_new(&lib, &a);
     MDIT_ASSERT_TRUE(mdit_renderer_add_rule(r,
         MDIT_STR_LIT("text"), custom_text_rule));
 
     mdit_token t;
-    mdit_token_init(&t, &a, MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
+    mdit_token_init(&t, &lib, &a, MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
     mdit_token_set_content(&t, MDIT_STR_LIT("hi & bye"));
 
     mdit_buf b; mdit_buf_init(&b);
@@ -249,15 +278,17 @@ MDIT_TEST(renderer_custom_rule_replaces_default)
     mdit_buf_destroy(&b);
 
     mdit_renderer_destroy(r);
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 /* Render tag attrs in a couple variants. */
 MDIT_TEST(renderer_attrs_escape_keys_and_values)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_token t;
-    mdit_token_init(&t, &a, MDIT_STR_LIT("a"), MDIT_STR_LIT("a"), 1);
+    mdit_token_init(&t, &lib, &a, MDIT_STR_LIT("a"), MDIT_STR_LIT("a"), 1);
     mdit_token_attr_set_z(&t, "href", mdit_value_cstr("/p?q=1&r=2"));
     mdit_token_attr_set_z(&t, "title", mdit_value_cstr("a \"quoted\" title"));
 
@@ -267,7 +298,7 @@ MDIT_TEST(renderer_attrs_escape_keys_and_values)
         " href=\"/p?q=1&amp;r=2\" title=\"a &quot;quoted&quot; title\"");
     mdit_buf_destroy(&b);
 
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 #define MDIT_TEST_REGISTRY                                                 \

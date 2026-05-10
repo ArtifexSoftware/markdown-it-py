@@ -5,9 +5,10 @@
 #include "case_fold.h"
 #include "str.h"
 
-void mdit_env_init(mdit_env *env, mdit_arena *arena)
+void mdit_env_init(mdit_env *env, mdit_lib_ctx *lib, mdit_arena *arena)
 {
     memset(env, 0, sizeof *env);
+    env->lib   = lib;
     env->arena = arena;
 }
 
@@ -26,7 +27,7 @@ const mdit_reference *mdit_env_get_reference(const mdit_env *env,
     return NULL;
 }
 
-static bool ensure_ref_cap(mdit_arena *arena,
+static bool ensure_ref_cap(mdit_lib_ctx *lib, mdit_arena *arena,
                            mdit_reference **data,
                            size_t *cap,
                            size_t want)
@@ -35,7 +36,7 @@ static bool ensure_ref_cap(mdit_arena *arena,
     size_t new_cap = (*cap == 0) ? 8 : (*cap * 2);
     while (new_cap < want) new_cap *= 2;
     mdit_reference *next =
-        (mdit_reference *)mdit_arena_alloc(arena, new_cap * sizeof **data);
+        (mdit_reference *)mdit_arena_alloc(lib, arena, new_cap * sizeof **data);
     if (*data != NULL && *cap > 0) {
         memcpy(next, *data, *cap * sizeof **data);
     }
@@ -60,14 +61,14 @@ bool mdit_env_add_reference(mdit_env *env,
     ref.map_end = map_end;
 
     if (mdit_env_get_reference(env, label) != NULL) {
-        if (!ensure_ref_cap(env->arena, &env->duplicate_refs,
+        if (!ensure_ref_cap(env->lib, env->arena, &env->duplicate_refs,
                             &env->duplicate_refs_cap,
                             env->duplicate_refs_len + 1)) return false;
         env->duplicate_refs[env->duplicate_refs_len++] = ref;
         return true;
     }
 
-    if (!ensure_ref_cap(env->arena, &env->references,
+    if (!ensure_ref_cap(env->lib, env->arena, &env->references,
                         &env->references_cap,
                         env->references_len + 1)) return false;
     env->references[env->references_len++] = ref;
@@ -92,7 +93,8 @@ static bool ref_norm_space(unsigned char c)
            c == '\v' || c == '\f';
 }
 
-mdit_str mdit_env_normalize_reference(mdit_arena *arena, mdit_str input)
+mdit_str mdit_env_normalize_reference(mdit_lib_ctx *lib, mdit_arena *arena,
+                                      mdit_str input)
 {
     size_t lo = 0, hi = input.len;
     while (lo < hi && ref_norm_space((unsigned char)input.data[lo])) ++lo;
@@ -104,7 +106,7 @@ mdit_str mdit_env_normalize_reference(mdit_arena *arena, mdit_str input)
      * 2x bound is wasteful for the common ASCII-only path but keeps
      * the allocator call count down. */
     size_t cap = (hi - lo) * 2 + 1;
-    char *buf = (char *)mdit_arena_alloc(arena, cap);
+    char *buf = (char *)mdit_arena_alloc(lib, arena, cap);
     size_t w = 0;
     bool in_ws = false;
 
@@ -147,7 +149,7 @@ mdit_str mdit_env_normalize_reference(mdit_arena *arena, mdit_str input)
              * outputs — shouldn't occur in practice, but be safe). */
             if (w + m_len > cap) {
                 size_t new_cap = cap * 2 + m_len;
-                char *grow = (char *)mdit_arena_alloc(arena, new_cap);
+                char *grow = (char *)mdit_arena_alloc(lib, arena, new_cap);
                 memcpy(grow, buf, w);
                 buf = grow;
                 cap = new_cap;
@@ -158,7 +160,7 @@ mdit_str mdit_env_normalize_reference(mdit_arena *arena, mdit_str input)
             /* Identity mapping: emit the original UTF-8 bytes. */
             if (w + step > cap) {
                 size_t new_cap = cap * 2 + step;
-                char *grow = (char *)mdit_arena_alloc(arena, new_cap);
+                char *grow = (char *)mdit_arena_alloc(lib, arena, new_cap);
                 memcpy(grow, buf, w);
                 buf = grow;
                 cap = new_cap;

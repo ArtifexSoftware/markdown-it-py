@@ -413,30 +413,32 @@ static bool unicode_label_apply(mdit_str label, mdit_buf *out)
 /* ---------------------------------------------------------------------
  * Public wrappers — copy the result into the arena.
  * ------------------------------------------------------------------- */
-static mdit_str arena_copy_buf(mdit_arena *arena, mdit_buf b)
+static mdit_str arena_copy_buf(mdit_lib_ctx *lib, mdit_arena *arena, mdit_buf b)
 {
     if (b.len == 0) return MDIT_STR_LIT("");
-    char *p = (char *)mdit_arena_alloc(arena, b.len);
+    char *p = (char *)mdit_arena_alloc(lib, arena, b.len);
     memcpy(p, b.data, b.len);
     return (mdit_str){ p, b.len };
 }
 
-bool mdit_idn_to_ascii(mdit_arena *arena, mdit_str hostname, mdit_str *out)
+bool mdit_idn_to_ascii(mdit_lib_ctx *lib, mdit_arena *arena,
+                       mdit_str hostname, mdit_str *out)
 {
     mdit_buf buf;
     mdit_buf_init(&buf);
     bool ok = map_domain(hostname, ascii_label_apply, &buf);
-    if (ok) *out = arena_copy_buf(arena, buf);
+    if (ok) *out = arena_copy_buf(lib, arena, buf);
     mdit_buf_destroy(&buf);
     return ok;
 }
 
-bool mdit_idn_to_unicode(mdit_arena *arena, mdit_str hostname, mdit_str *out)
+bool mdit_idn_to_unicode(mdit_lib_ctx *lib, mdit_arena *arena,
+                         mdit_str hostname, mdit_str *out)
 {
     mdit_buf buf;
     mdit_buf_init(&buf);
     bool ok = map_domain(hostname, unicode_label_apply, &buf);
-    if (ok) *out = arena_copy_buf(arena, buf);
+    if (ok) *out = arena_copy_buf(lib, arena, buf);
     mdit_buf_destroy(&buf);
     return ok;
 }

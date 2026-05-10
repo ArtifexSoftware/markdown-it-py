@@ -62,6 +62,7 @@ MDIT_VEC_DEFINE (chain_cache, mdit_chain_cache)
  * Ruler
  * ------------------------------------------------------------------- */
 struct mdit_ruler {
+    mdit_lib_ctx           *lib;
     mdit_arena             *arena;
     mdit_vec_rule_records   rules;
 
@@ -76,14 +77,15 @@ struct mdit_ruler {
 /* ---------------------------------------------------------------------
  * Lifecycle
  * ------------------------------------------------------------------- */
-mdit_ruler *mdit_ruler_new(mdit_arena *arena)
+mdit_ruler *mdit_ruler_new(mdit_lib_ctx *lib, mdit_arena *arena)
 {
-    mdit_ruler *r = (mdit_ruler *)mdit_arena_zalloc(arena, sizeof *r);
+    mdit_ruler *r = (mdit_ruler *)mdit_arena_zalloc(lib, arena, sizeof *r);
+    r->lib         = lib;
     r->arena       = arena;
     r->cache_dirty = true;
-    mdit_vec_rule_records_init(&r->rules,         arena);
-    mdit_vec_chain_cache_init (&r->cache,         arena);
-    mdit_vec_str_vec_init     (&r->names_scratch, arena);
+    mdit_vec_rule_records_init(&r->rules,         lib, arena);
+    mdit_vec_chain_cache_init (&r->cache,         lib, arena);
+    mdit_vec_str_vec_init     (&r->names_scratch, lib, arena);
     return r;
 }
 
@@ -94,6 +96,7 @@ void mdit_ruler_destroy(mdit_ruler *r)
     mdit_vec_rule_records_destroy(&r->rules);
     mdit_vec_chain_cache_destroy (&r->cache);
     mdit_vec_str_vec_destroy     (&r->names_scratch);
+    r->lib   = NULL;
     r->arena = NULL;
 }
 
@@ -110,11 +113,12 @@ static int find_rule(const mdit_ruler *r, mdit_str name)
     return -1;
 }
 
-static mdit_str *clone_alt(mdit_arena *a, const mdit_rule_options *opts)
+static mdit_str *clone_alt(mdit_lib_ctx *lib, mdit_arena *a,
+                           const mdit_rule_options *opts)
 {
     if (opts == NULL || opts->alt_len == 0) return NULL;
     mdit_str *copy = (mdit_str *)mdit_arena_alloc(
-        a, opts->alt_len * sizeof(mdit_str));
+        lib, a, opts->alt_len * sizeof(mdit_str));
     memcpy(copy, opts->alt, opts->alt_len * sizeof(mdit_str));
     return copy;
 }
@@ -157,7 +161,7 @@ static mdit_rule_status insert_at(mdit_ruler *r, size_t pos,
     slot->is_callback = is_callback;
     slot->fn          = fn;
     slot->user        = user;
-    slot->alt         = clone_alt(r->arena, &opts);
+        slot->alt         = clone_alt(r->lib, r->arena, &opts);
     slot->alt_len     = opts.alt_len;
 
     mark_dirty(r);
@@ -214,7 +218,7 @@ mdit_rule_status mdit_ruler_at(mdit_ruler *r,
     slot->is_callback = false;
     slot->fn          = fn;
     slot->user        = user;
-    slot->alt         = clone_alt(r->arena, &opts);
+        slot->alt         = clone_alt(r->lib, r->arena, &opts);
     slot->alt_len     = opts.alt_len;
     /* `at` does NOT touch enabled flag — matches upstream. */
     mark_dirty(r);
@@ -274,7 +278,7 @@ mdit_rule_status mdit_ruler_at_callback(mdit_ruler *r,
     slot->is_callback = true;
     slot->fn          = fn;
     slot->user        = user;
-    slot->alt         = clone_alt(r->arena, &opts);
+        slot->alt         = clone_alt(r->lib, r->arena, &opts);
     slot->alt_len     = opts.alt_len;
     /* `at` does NOT touch enabled flag — matches upstream. */
     mark_dirty(r);
@@ -352,7 +356,7 @@ static mdit_chain_cache *ensure_chain(mdit_ruler *r, mdit_str chain)
 
     mdit_chain_cache *slot = mdit_vec_chain_cache_emplace(&r->cache);
     slot->name = chain;
-    mdit_vec_rule_entries_init(&slot->entries, r->arena);
+    mdit_vec_rule_entries_init(&slot->entries, r->lib, r->arena);
     return slot;
 }
 

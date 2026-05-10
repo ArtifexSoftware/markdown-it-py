@@ -441,9 +441,10 @@ static size_t scan_email_local(const char *s, size_t n)
 /* ---------------------------------------------------------------------
  * Pre-flight / hint test.
  * ------------------------------------------------------------------- */
-static bool df_pretest(void *self, mdit_str text)
+static bool df_pretest(void *self, mdit_lib_ctx *lib, mdit_str text)
 {
     (void)self;
+    (void)lib;
     /* True if the text contains `://`, `@`, or a `.` followed by a
      * letter/digit (cheap proxy for fuzzy host). */
     for (size_t i = 0; i + 2 < text.len; ++i) {
@@ -470,7 +471,7 @@ static bool df_pretest(void *self, mdit_str text)
  * "schema length" actually consumed before the host (for the fuzzy
  * vs strict distinction).
  * ------------------------------------------------------------------- */
-static bool emit_match(mdit_arena *arena,
+static bool emit_match(mdit_lib_ctx *lib, mdit_arena *arena,
                        mdit_str schema_lit,
                        mdit_str text,
                        size_t start, size_t end,
@@ -486,7 +487,7 @@ static bool emit_match(mdit_arena *arena,
 
     /* If a prefix is provided, emit url = prefix + raw text. */
     if (url_prefix_len > 0) {
-        char *buf = (char *)mdit_arena_alloc(arena,
+        char *buf = (char *)mdit_arena_alloc(lib, arena,
                                              url_prefix_len + raw_len);
         if (buf == NULL) return false;
         memcpy(buf, url_prefix, url_prefix_len);
@@ -498,7 +499,7 @@ static bool emit_match(mdit_arena *arena,
     return true;
 }
 
-static bool match_http(mdit_arena *arena,
+static bool match_http(mdit_lib_ctx *lib, mdit_arena *arena,
                        mdit_str text, size_t pos,
                        size_t scheme_len,
                        mdit_linkify_match *out)
@@ -524,10 +525,10 @@ static bool match_http(mdit_arena *arena,
     /* Build the schema literal "http:" / "https:" / "ftp:". */
     mdit_str schema = { text.data + pos, scheme_len + 1 };
     /* Emit the URL as the matched substring (no prefix). */
-    return emit_match(arena, schema, text, pos, i, NULL, 0, out);
+    return emit_match(lib, arena, schema, text, pos, i, NULL, 0, out);
 }
 
-static bool match_mailto(mdit_arena *arena,
+static bool match_mailto(mdit_lib_ctx *lib, mdit_arena *arena,
                          mdit_str text, size_t pos,
                          size_t scheme_len,
                          mdit_linkify_match *out)
@@ -544,14 +545,14 @@ static bool match_mailto(mdit_arena *arena,
     i += host;
     /* mailto schema doesn't append path. */
     mdit_str schema = MDIT_STR_LIT("mailto:");
-    return emit_match(arena, schema, text, pos, i, NULL, 0, out);
+    return emit_match(lib, arena, schema, text, pos, i, NULL, 0, out);
 }
 
 /* Bare email `local@host.tld`. Validated against the TLD list.
  * Boundary on the LEFT side: must be at start of text or preceded by
  * whitespace / punctuation that linkify-it allows (we approximate).
  */
-static bool match_fuzzy_email(mdit_arena *arena,
+static bool match_fuzzy_email(mdit_lib_ctx *lib, mdit_arena *arena,
                               mdit_str text, size_t pos,
                               mdit_linkify_match *out)
 {
@@ -586,12 +587,12 @@ static bool match_fuzzy_email(mdit_arena *arena,
 
     /* Build url = "mailto:" + raw. */
     static const char prefix[] = "mailto:";
-    return emit_match(arena, MDIT_STR_LIT("mailto:"), text, back, i,
+    return emit_match(lib, arena, MDIT_STR_LIT("mailto:"), text, back, i,
                       prefix, sizeof prefix - 1, out);
 }
 
 /* Bare URL `host.tld[:port][/path]` or `www.host.tld...` — fuzzy. */
-static bool match_fuzzy_link(mdit_arena *arena,
+static bool match_fuzzy_link(mdit_lib_ctx *lib, mdit_arena *arena,
                              mdit_str text, size_t pos,
                              mdit_linkify_match *out)
 {
@@ -647,13 +648,13 @@ static bool match_fuzzy_link(mdit_arena *arena,
     i += scan_path(text.data + i, text.len - i);
 
     static const char prefix[] = "http://";
-    return emit_match(arena, MDIT_STR_LIT(""), text, back, i,
+    return emit_match(lib, arena, MDIT_STR_LIT(""), text, back, i,
                       prefix, sizeof prefix - 1, out);
 }
 
 /* Try every known matcher at position `pos`. Returns true if any
  * succeeded. */
-static bool try_match_at(mdit_arena *arena,
+static bool try_match_at(mdit_lib_ctx *lib, mdit_arena *arena,
                          mdit_str text, size_t pos,
                          mdit_linkify_match *out)
 {
@@ -662,10 +663,10 @@ static bool try_match_at(mdit_arena *arena,
     if (scheme_len > 0) {
         const char *sn = text.data + pos;
         if (is_http_scheme(sn, scheme_len)) {
-            if (match_http(arena, text, pos, scheme_len, out)) return true;
+            if (match_http(lib, arena, text, pos, scheme_len, out)) return true;
         }
         if (is_mailto_scheme(sn, scheme_len)) {
-            if (match_mailto(arena, text, pos, scheme_len, out)) return true;
+            if (match_mailto(lib, arena, text, pos, scheme_len, out)) return true;
         }
     }
     return false;
@@ -674,57 +675,57 @@ static bool try_match_at(mdit_arena *arena,
 /* ---------------------------------------------------------------------
  * Public entry points
  * ------------------------------------------------------------------- */
-static bool df_test(void *self, mdit_str text)
+static bool df_test(void *self, mdit_lib_ctx *lib, mdit_str text)
 {
     (void)self;
-    if (!df_pretest(NULL, text)) return false;
+    if (!df_pretest(NULL, lib, text)) return false;
     mdit_arena scratch;
     mdit_arena_init(&scratch, 0);
     mdit_linkify_match m;
 
     for (size_t i = 0; i < text.len; ++i) {
-        if (try_match_at(&scratch, text, i, &m)) {
-            mdit_arena_destroy(&scratch);
+        if (try_match_at(lib, &scratch, text, i, &m)) {
+            mdit_arena_destroy(lib, &scratch);
             return true;
         }
         if (text.data[i] == '@' &&
-            match_fuzzy_email(&scratch, text, i, &m)) {
-            mdit_arena_destroy(&scratch);
+            match_fuzzy_email(lib, &scratch, text, i, &m)) {
+            mdit_arena_destroy(lib, &scratch);
             return true;
         }
         if (text.data[i] == '.' &&
-            match_fuzzy_link(&scratch, text, i, &m)) {
-            mdit_arena_destroy(&scratch);
+            match_fuzzy_link(lib, &scratch, text, i, &m)) {
+            mdit_arena_destroy(lib, &scratch);
             return true;
         }
     }
-    mdit_arena_destroy(&scratch);
+    mdit_arena_destroy(lib, &scratch);
     return false;
 }
 
-static bool df_match_at_start(void *self, mdit_arena *arena,
+static bool df_match_at_start(void *self, mdit_lib_ctx *lib, mdit_arena *arena,
                               mdit_str text, mdit_linkify_match *out)
 {
     (void)self;
     if (text.len == 0) return false;
-    if (try_match_at(arena, text, 0, out) && out->index == 0) return true;
+    if (try_match_at(lib, arena, text, 0, out) && out->index == 0) return true;
     /* Only explicit-scheme matches are returned by `match_at_start`
      * upstream — fuzzy matches require a non-letter prefix. */
     return false;
 }
 
-static size_t df_match_all(void *self, mdit_arena *arena,
+static size_t df_match_all(void *self, mdit_lib_ctx *lib, mdit_arena *arena,
                            mdit_str text, mdit_linkify_match **out)
 {
     (void)self;
     *out = NULL;
-    if (!df_pretest(NULL, text)) return 0;
+    if (!df_pretest(NULL, lib, text)) return 0;
 
     /* Two-pass: count, then fill. */
     size_t count = 0;
     for (size_t pass = 0; pass < 2; ++pass) {
         if (pass == 1 && count > 0) {
-            *out = (mdit_linkify_match *)mdit_arena_alloc(arena,
+            *out = (mdit_linkify_match *)mdit_arena_alloc(lib, arena,
                 count * sizeof **out);
             if (*out == NULL) return 0;
         }
@@ -733,13 +734,13 @@ static size_t df_match_all(void *self, mdit_arena *arena,
         while (i < text.len) {
             mdit_linkify_match m;
             bool found = false;
-            if (try_match_at(arena, text, i, &m)) {
+            if (try_match_at(lib, arena, text, i, &m)) {
                 found = true;
             } else if (text.data[i] == '@' &&
-                       match_fuzzy_email(arena, text, i, &m)) {
+                       match_fuzzy_email(lib, arena, text, i, &m)) {
                 found = true;
             } else if (text.data[i] == '.' &&
-                       match_fuzzy_link(arena, text, i, &m)) {
+                       match_fuzzy_link(lib, arena, text, i, &m)) {
                 found = true;
             }
             if (found) {

@@ -35,6 +35,7 @@
 #include <stdint.h>
 
 #include "arena.h"
+#include "mdit/mdit_lib_ctx.h"
 #include "str.h"
 
 #ifdef __cplusplus
@@ -112,10 +113,11 @@ typedef struct mdit_map {
     mdit_map_entry *data;
     size_t          len;
     size_t          cap;
+    mdit_lib_ctx   *lib;      /* required when arena != NULL */
     mdit_arena     *arena;   /* NULL = malloc-backed */
 } mdit_map;
 
-void  mdit_map_init    (mdit_map *m, mdit_arena *arena);
+void  mdit_map_init    (mdit_map *m, mdit_lib_ctx *lib, mdit_arena *arena);
 void  mdit_map_destroy (mdit_map *m);
 void  mdit_map_clear   (mdit_map *m);
 size_t mdit_map_len    (const mdit_map *m);

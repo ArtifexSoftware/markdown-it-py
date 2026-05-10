@@ -11,6 +11,7 @@
 #include "mdit_test.h"
 
 #include "arena.h"
+#include "mdit/mdit_lib_ctx.h"
 #include "ruler.h"
 #include "str.h"
 
@@ -57,8 +58,10 @@ static void run(mdit_ruler *r, mdit_str chain, call_log *log)
 
 MDIT_TEST(ruler_push_preserves_order)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
-    mdit_ruler *r = mdit_ruler_new(&a);
+    mdit_ruler *r = mdit_ruler_new(&lib, &a);
 
     mdit_ruler_push(r, MDIT_STR_LIT("alpha"), rule_alpha, NULL,
                     MDIT_RULE_OPTIONS_NONE);
@@ -74,13 +77,15 @@ MDIT_TEST(ruler_push_preserves_order)
     MDIT_ASSERT_EQ_INT(log.seq[1], 2);
     MDIT_ASSERT_EQ_INT(log.seq[2], 3);
 
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(ruler_before_after_at)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
-    mdit_ruler *r = mdit_ruler_new(&a);
+    mdit_ruler *r = mdit_ruler_new(&lib, &a);
 
     mdit_ruler_push  (r, MDIT_STR_LIT("alpha"), rule_alpha, NULL,
                       MDIT_RULE_OPTIONS_NONE);
@@ -108,13 +113,15 @@ MDIT_TEST(ruler_before_after_at)
     MDIT_ASSERT_EQ_SZ(log.len, 4);
     MDIT_ASSERT_EQ_INT(log.seq[1], 1); /* alpha now in beta's slot */
 
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(ruler_disable_then_enable)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
-    mdit_ruler *r = mdit_ruler_new(&a);
+    mdit_ruler *r = mdit_ruler_new(&lib, &a);
     mdit_ruler_push(r, MDIT_STR_LIT("alpha"), rule_alpha, NULL,
                     MDIT_RULE_OPTIONS_NONE);
     mdit_ruler_push(r, MDIT_STR_LIT("beta"),  rule_beta,  NULL,
@@ -140,13 +147,15 @@ MDIT_TEST(ruler_disable_then_enable)
     MDIT_ASSERT_EQ_SZ(log.len, 3);
     MDIT_ASSERT_EQ_INT(log.seq[1], 2);
 
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(ruler_disable_unknown_with_ignore)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
-    mdit_ruler *r = mdit_ruler_new(&a);
+    mdit_ruler *r = mdit_ruler_new(&lib, &a);
     mdit_ruler_push(r, MDIT_STR_LIT("alpha"), rule_alpha, NULL,
                     MDIT_RULE_OPTIONS_NONE);
     mdit_str names[] = { MDIT_STR_LIT("nope"), MDIT_STR_LIT("alpha") };
@@ -155,13 +164,15 @@ MDIT_TEST(ruler_disable_unknown_with_ignore)
     /* Without ignore, the same call should fail. */
     int n2 = mdit_ruler_disable(r, names, 2, false);
     MDIT_ASSERT_EQ_INT(n2, -1);
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(ruler_enable_only_disables_others)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
-    mdit_ruler *r = mdit_ruler_new(&a);
+    mdit_ruler *r = mdit_ruler_new(&lib, &a);
     mdit_ruler_push(r, MDIT_STR_LIT("alpha"), rule_alpha, NULL,
                     MDIT_RULE_OPTIONS_NONE);
     mdit_ruler_push(r, MDIT_STR_LIT("beta"),  rule_beta,  NULL,
@@ -178,13 +189,15 @@ MDIT_TEST(ruler_enable_only_disables_others)
     MDIT_ASSERT_EQ_SZ(log.len, 1);
     MDIT_ASSERT_EQ_INT(log.seq[0], 3);
 
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(ruler_alt_chains)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
-    mdit_ruler *r = mdit_ruler_new(&a);
+    mdit_ruler *r = mdit_ruler_new(&lib, &a);
 
     /* alpha is in the default chain only.
      * beta lives in 'alt1' and 'alt2'.
@@ -222,13 +235,15 @@ MDIT_TEST(ruler_alt_chains)
     MDIT_ASSERT_EQ_PTR(e, NULL);
     MDIT_ASSERT_EQ_SZ(n, 0);
 
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(ruler_duplicate_push_fails)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
-    mdit_ruler *r = mdit_ruler_new(&a);
+    mdit_ruler *r = mdit_ruler_new(&lib, &a);
     mdit_rule_status s1 = mdit_ruler_push(r, MDIT_STR_LIT("alpha"),
         rule_alpha, NULL, MDIT_RULE_OPTIONS_NONE);
     MDIT_ASSERT(s1.index >= 0);
@@ -236,23 +251,27 @@ MDIT_TEST(ruler_duplicate_push_fails)
         rule_beta, NULL, MDIT_RULE_OPTIONS_NONE);
     MDIT_ASSERT_EQ_INT(s2.index, MDIT_RULE_DUPLICATE);
     MDIT_ASSERT_NE(s2.message, NULL);
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(ruler_anchor_not_found)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
-    mdit_ruler *r = mdit_ruler_new(&a);
+    mdit_ruler *r = mdit_ruler_new(&lib, &a);
     mdit_rule_status s = mdit_ruler_before(r, MDIT_STR_LIT("missing"),
         MDIT_STR_LIT("alpha"), rule_alpha, NULL, MDIT_RULE_OPTIONS_NONE);
     MDIT_ASSERT_EQ_INT(s.index, MDIT_RULE_NOT_FOUND);
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(ruler_introspection_apis)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
-    mdit_ruler *r = mdit_ruler_new(&a);
+    mdit_ruler *r = mdit_ruler_new(&lib, &a);
     mdit_ruler_push(r, MDIT_STR_LIT("alpha"), rule_alpha, NULL,
                     MDIT_RULE_OPTIONS_NONE);
     mdit_ruler_push(r, MDIT_STR_LIT("beta"),  rule_beta,  NULL,
@@ -277,7 +296,7 @@ MDIT_TEST(ruler_introspection_apis)
     MDIT_ASSERT_TRUE (mdit_ruler_has(r, MDIT_STR_LIT("alpha")));
     MDIT_ASSERT_FALSE(mdit_ruler_has(r, MDIT_STR_LIT("missing")));
 
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 #define MDIT_TEST_REGISTRY                                                 \

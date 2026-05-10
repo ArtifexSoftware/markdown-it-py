@@ -51,14 +51,16 @@ typedef struct mdit_url {
 
 /*
  * Parse ``input`` (UTF-8) into ``out``, allocating substring views
- * from ``arena``. ``slashes_denote_host`` controls whether a leading
- * ``//`` enables host-mode parsing (matches the upstream kwarg).
+ * from ``arena`` via ``lib``'s hooks. ``slashes_denote_host`` controls
+ * whether a leading ``//`` enables host-mode parsing (matches the
+ * upstream kwarg).
  *
  * The parser never fails: any malformed-looking URL is parsed in a
  * "best effort" mode that mirrors what Python's mdurl does. The only
  * way this returns false is on out-of-memory.
  */
-bool mdit_url_parse(mdit_arena *arena,
+bool mdit_url_parse(mdit_lib_ctx *lib,
+                    mdit_arena *arena,
                     mdit_str input,
                     bool slashes_denote_host,
                     mdit_url *out);

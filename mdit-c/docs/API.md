@@ -10,7 +10,8 @@ through the shipped CPython extension.
 
 | Header | Purpose |
 | ------ | ------- |
-| `mdit/mdit.h`     | curated public API (versioning, status codes, `mdit_ctx`) |
+| `mdit/mdit.h`          | curated public API (versioning, status codes, `mdit_ctx`) |
+| `mdit/mdit_lib_ctx.h` | allocator hooks + OOM callback (`mdit_lib_ctx`); passed explicitly to arena and `mdit_md` APIs |
 | `mdit/main.h`     | `mdit_md` engine: init, parse, render, plugin install |
 | `mdit/token.h`    | `mdit_token` and the `mdit_vec_token` containers |
 | `mdit/state.h`    | `mdit_state_core/_block/_inline` parser-state types |
@@ -34,12 +35,15 @@ when `MDIT_INSTALL=ON`.
 
 ```c
 #include <mdit/main.h>
+#include <mdit/mdit_lib_ctx.h>
 
-mdit_arena arena;
-mdit_md    md;
+mdit_lib_ctx lib;
+mdit_arena   arena;
+mdit_md      md;
 
+mdit_lib_ctx_init_defaults(&lib);
 mdit_arena_init(&arena, 0);
-mdit_md_init(&md, &arena);
+mdit_md_init(&md, &lib, &arena);
 
 mdit_buf out;
 mdit_buf_init(&out);
@@ -48,12 +52,14 @@ fwrite(out.data, 1, out.len, stdout);
 
 mdit_buf_destroy(&out);
 mdit_md_destroy(&md);
-mdit_arena_destroy(&arena);
+mdit_arena_destroy(&lib, &arena);
 ```
 
 The engine pulls every long-lived allocation (tokens, attribute
-maps, interned strings) from the user-supplied `mdit_arena`. When
-the arena is destroyed, every object that ever flowed through the
+maps, interned strings) from the user-supplied `mdit_arena`.
+Allocator behavior and out-of-memory handling come from `mdit_lib_ctx`,
+which is passed alongside the arena to init, reset, and destroy calls.
+When the arena is destroyed, every object that ever flowed through the
 engine vanishes in a single free — the simplest possible memory
 model and the source of most of the C engine's speed advantage.
 

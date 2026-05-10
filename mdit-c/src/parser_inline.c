@@ -112,11 +112,11 @@ static bool inline_escape(mdit_state_inline *state, bool silent)
         mdit_token *t = mdit_state_inline_push(state,
             MDIT_STR_LIT("text_special"), MDIT_STR_LIT(""), 0);
         if (t == NULL) return false;
-        char *cbuf = (char *)mdit_arena_alloc(state->arena, content_len);
+        char *cbuf = (char *)mdit_arena_alloc(state->md->lib, state->arena, content_len);
         memcpy(cbuf, content_start, content_len);
         t->content.data = cbuf;
         t->content.len  = content_len;
-        char *mbuf = (char *)mdit_arena_alloc(state->arena, markup_len);
+        char *mbuf = (char *)mdit_arena_alloc(state->md->lib, state->arena, markup_len);
         memcpy(mbuf, markup_start, markup_len);
         t->markup.data = mbuf;
         t->markup.len  = markup_len;
@@ -167,7 +167,7 @@ static bool inline_backticks(mdit_state_inline *state, bool silent)
             if (!silent) {
                 /* Build content: replace '\n' with ' '. */
                 size_t content_len = match_start - pos;
-                char *content = (char *)mdit_arena_alloc(state->arena,
+                char *content = (char *)mdit_arena_alloc(state->md->lib, state->arena,
                                                         content_len);
                 for (size_t i = 0; i < content_len; ++i) {
                     char c = state->src.data[pos + i];
@@ -189,7 +189,7 @@ static bool inline_backticks(mdit_state_inline *state, bool silent)
                 if (t == NULL) return false;
                 t->content.data = content + lo;
                 t->content.len  = hi - lo;
-                char *mbuf = (char *)mdit_arena_alloc(state->arena, opener_len);
+                char *mbuf = (char *)mdit_arena_alloc(state->md->lib, state->arena, opener_len);
                 memcpy(mbuf, state->src.data + start, opener_len);
                 t->markup.data = mbuf;
                 t->markup.len  = opener_len;
@@ -227,10 +227,10 @@ static bool emit_text_special_str(mdit_state_inline *state,
     mdit_token *t = mdit_state_inline_push(state,
         MDIT_STR_LIT("text_special"), MDIT_STR_LIT(""), 0);
     if (t == NULL) return false;
-    char *cbuf = (char *)mdit_arena_alloc(state->arena, content_len);
+    char *cbuf = (char *)mdit_arena_alloc(state->md->lib, state->arena, content_len);
     memcpy(cbuf, content, content_len);
     t->content.data = cbuf; t->content.len = content_len;
-    char *mbuf = (char *)mdit_arena_alloc(state->arena, markup_len);
+    char *mbuf = (char *)mdit_arena_alloc(state->md->lib, state->arena, markup_len);
     memcpy(mbuf, markup, markup_len);
     t->markup.data = mbuf; t->markup.len = markup_len;
     t->info = MDIT_STR_LIT("entity");
@@ -481,14 +481,14 @@ static bool inline_autolink(mdit_state_inline *state, bool silent)
 
     if (autolink_url_ok(url_start, url_len)) {
         mdit_str href;
-        if (!mdit_normalize_link(state->arena,
+        if (!mdit_normalize_link(state->md->lib, state->arena,
                                  (mdit_str){ url_start, url_len }, &href)) {
             return false;
         }
         if (!mdit_validate_link(href)) return false;
         if (!silent) {
             mdit_str text;
-            if (!mdit_normalize_link_text(state->arena,
+            if (!mdit_normalize_link_text(state->md->lib, state->arena,
                                           (mdit_str){ url_start, url_len },
                                           &text)) return false;
             if (!emit_autolink(state, href, text)) return false;
@@ -500,16 +500,16 @@ static bool inline_autolink(mdit_state_inline *state, bool silent)
     if (autolink_email_ok(url_start, url_len)) {
         /* Build "mailto:" + url. */
         size_t total = 7 + url_len;
-        char *buf = (char *)mdit_arena_alloc(state->arena, total);
+        char *buf = (char *)mdit_arena_alloc(state->md->lib, state->arena, total);
         memcpy(buf, "mailto:", 7);
         memcpy(buf + 7, url_start, url_len);
         mdit_str href;
-        if (!mdit_normalize_link(state->arena,
+        if (!mdit_normalize_link(state->md->lib, state->arena,
                                  (mdit_str){ buf, total }, &href)) return false;
         if (!mdit_validate_link(href)) return false;
         if (!silent) {
             mdit_str text;
-            if (!mdit_normalize_link_text(state->arena,
+            if (!mdit_normalize_link_text(state->md->lib, state->arena,
                                           (mdit_str){ url_start, url_len },
                                           &text)) return false;
             if (!emit_autolink(state, href, text)) return false;
@@ -557,7 +557,7 @@ static bool inline_html(mdit_state_inline *state, bool silent)
         mdit_token *t = mdit_state_inline_push(state,
             MDIT_STR_LIT("html_inline"), MDIT_STR_LIT(""), 0);
         if (t == NULL) return false;
-        char *cbuf = (char *)mdit_arena_alloc(state->arena, consumed);
+        char *cbuf = (char *)mdit_arena_alloc(state->md->lib, state->arena, consumed);
         memcpy(cbuf, state->src.data + pos, consumed);
         t->content.data = cbuf;
         t->content.len  = consumed;
@@ -636,7 +636,7 @@ static bool inline_linkify(mdit_state_inline *state, bool silent)
         pos_max - (pos - proto_len)
     };
     mdit_linkify_match m;
-    if (!L->match_at_start(L->self, state->arena, candidate, &m)) {
+    if (!L->match_at_start(L->self, state->md->lib, state->arena, candidate, &m)) {
         return false;
     }
 
@@ -649,7 +649,7 @@ static bool inline_linkify(mdit_state_inline *state, bool silent)
     if (m.url.len == 0) return false;
 
     mdit_str href;
-    if (!mdit_normalize_link(state->arena, m.url, &href)) return false;
+    if (!mdit_normalize_link(state->md->lib, state->arena, m.url, &href)) return false;
     if (!mdit_validate_link(href)) return false;
 
     if (!silent) {
@@ -672,7 +672,7 @@ static bool inline_linkify(mdit_state_inline *state, bool silent)
             MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
         if (txt == NULL) return false;
         mdit_str rendered;
-        if (!mdit_normalize_link_text(state->arena, m.url, &rendered)) {
+        if (!mdit_normalize_link_text(state->md->lib, state->arena, m.url, &rendered)) {
             return false;
         }
         txt->content = rendered;
@@ -774,7 +774,7 @@ static bool inline_emphasis_tokenize(mdit_state_inline *state, bool silent)
         mdit_token *t = mdit_state_inline_push(state,
             MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
         if (t == NULL) return false;
-        char *buf = (char *)mdit_arena_alloc(state->arena, 1);
+        char *buf = (char *)mdit_arena_alloc(state->md->lib, state->arena, 1);
         buf[0] = marker;
         t->content.data = buf;
         t->content.len = 1;
@@ -807,7 +807,7 @@ static void process_delimiters(mdit_state_inline *state,
     }
 
     size_t maximum = delimiters->len;
-    int32_t *jumps = (int32_t *)mdit_arena_alloc(state->arena,
+    int32_t *jumps = (int32_t *)mdit_arena_alloc(state->md->lib, state->arena,
                                                  maximum * sizeof *jumps);
     for (size_t i = 0; i < maximum; ++i) jumps[i] = 0;
 
@@ -1015,7 +1015,7 @@ static bool inline_strikethrough_tokenize(mdit_state_inline *state, bool silent)
             mdit_token *t = mdit_state_inline_push(state,
                 MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
             if (t == NULL) return false;
-            char *buf = (char *)mdit_arena_alloc(state->arena, (size_t)length);
+            char *buf = (char *)mdit_arena_alloc(state->md->lib, state->arena, (size_t)length);
             if (buf == NULL) return false;
             for (int32_t i = 0; i < length; ++i) buf[i] = '~';
             t->content.data = buf;
@@ -1027,7 +1027,7 @@ static bool inline_strikethrough_tokenize(mdit_state_inline *state, bool silent)
         mdit_token *t = mdit_state_inline_push(state,
             MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
         if (t == NULL) return false;
-        char *buf = (char *)mdit_arena_alloc(state->arena, (size_t)length);
+        char *buf = (char *)mdit_arena_alloc(state->md->lib, state->arena, (size_t)length);
         if (buf == NULL) return false;
         for (int32_t i = 0; i < length; ++i) buf[i] = '~';
         t->content.data = buf;
@@ -1052,7 +1052,7 @@ static bool inline_strikethrough_tokenize(mdit_state_inline *state, bool silent)
         mdit_token *t = mdit_state_inline_push(state,
             MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
         if (t == NULL) return false;
-        char *buf = (char *)mdit_arena_alloc(state->arena, 1);
+        char *buf = (char *)mdit_arena_alloc(state->md->lib, state->arena, 1);
         if (buf == NULL) return false;
         buf[0] = '~';
         t->content.data = buf;
@@ -1065,7 +1065,7 @@ static bool inline_strikethrough_tokenize(mdit_state_inline *state, bool silent)
         mdit_token *t = mdit_state_inline_push(state,
             MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
         if (t == NULL) return false;
-        char *buf = (char *)mdit_arena_alloc(state->arena, 2);
+        char *buf = (char *)mdit_arena_alloc(state->md->lib, state->arena, 2);
         if (buf == NULL) return false;
         buf[0] = '~';
         buf[1] = '~';
@@ -1097,8 +1097,7 @@ static void strikethrough_post_process_one(mdit_state_inline *state,
 
     /* lone-marker token indices. Capacity-bounded by the number of
      * `s_close` tokens we emit, which is bounded by `delimiters->len`. */
-    int32_t *lone_markers = (int32_t *)mdit_arena_alloc(
-        state->arena, delimiters->len * sizeof *lone_markers);
+    int32_t *lone_markers = (int32_t *)mdit_arena_alloc(state->md->lib, state->arena, delimiters->len * sizeof *lone_markers);
     size_t lone_count = 0;
 
     int32_t maximum = (int32_t)delimiters->len;
@@ -1220,7 +1219,7 @@ static void ruler2_fragments_join(mdit_state_inline *state)
             }
             mdit_token merged = tokens[curr - 1];
             if (total > 0) {
-                char *buf = (char *)mdit_arena_alloc(state->arena, total);
+                char *buf = (char *)mdit_arena_alloc(state->md->lib, state->arena, total);
                 size_t off = 0;
                 for (size_t i = start; i < curr; ++i) {
                     if (tokens[i].content.len > 0) {
@@ -1306,11 +1305,13 @@ static void terminator_init_default(bool *t)
 static bool inline_link (mdit_state_inline *state, bool silent);
 static bool inline_image(mdit_state_inline *state, bool silent);
 
-bool mdit_parser_inline_init(mdit_parser_inline *p, mdit_arena *arena)
+bool mdit_parser_inline_init(mdit_parser_inline *p, mdit_lib_ctx *lib,
+                             mdit_arena *arena)
 {
+    p->lib    = lib;
     p->arena  = arena;
-    p->ruler  = mdit_ruler_new(arena);
-    p->ruler2 = mdit_ruler_new(arena);
+    p->ruler  = mdit_ruler_new(lib, arena);
+    p->ruler2 = mdit_ruler_new(lib, arena);
     if (p->ruler == NULL || p->ruler2 == NULL) return false;
     terminator_init_default(p->terminator_ascii);
     /* Order matches upstream parser_inline.py. text is the catch-all. */
@@ -1469,12 +1470,12 @@ static bool inline_link(mdit_state_inline *state, bool silent)
 
         size_t dest_start = cursor;
         mdit_link_destination_result dr;
-        if (!mdit_parse_link_destination(state->arena, src, cursor, maximum, &dr)) {
+        if (!mdit_parse_link_destination(state->md->lib, state->arena, src, cursor, maximum, &dr)) {
             return false;
         }
         if (dr.ok) {
             mdit_str norm;
-            if (mdit_normalize_link(state->arena, dr.str, &norm) &&
+            if (mdit_normalize_link(state->md->lib, state->arena, dr.str, &norm) &&
                 mdit_validate_link(norm)) {
                 href = norm;
                 cursor = dr.pos;
@@ -1486,7 +1487,7 @@ static bool inline_link(mdit_state_inline *state, bool silent)
             cursor = li_skip_ws_inc_lf(src, cursor, maximum);
 
             mdit_link_title_result tr;
-            if (mdit_parse_link_title(state->arena, src,
+            if (mdit_parse_link_title(state->md->lib, state->arena, src,
                                       cursor, maximum, NULL, &tr) &&
                 cursor < maximum && after_dest != cursor && tr.ok) {
                 title = tr.str;
@@ -1526,7 +1527,7 @@ static bool inline_link(mdit_state_inline *state, bool silent)
         }
         (void)used_explicit_label;
 
-        mdit_str norm = mdit_env_normalize_reference(state->arena, label);
+        mdit_str norm = mdit_env_normalize_reference(state->md->lib, state->arena, label);
         const mdit_reference *ref = mdit_env_get_reference(env, norm);
         if (ref == NULL) {
             state->pos = old_pos;
@@ -1589,12 +1590,12 @@ static bool inline_image(mdit_state_inline *state, bool silent)
         if (cursor >= maximum) return false;
 
         mdit_link_destination_result dr;
-        if (!mdit_parse_link_destination(state->arena, src, cursor, maximum, &dr)) {
+        if (!mdit_parse_link_destination(state->md->lib, state->arena, src, cursor, maximum, &dr)) {
             return false;
         }
         if (dr.ok) {
             mdit_str norm;
-            if (mdit_normalize_link(state->arena, dr.str, &norm) &&
+            if (mdit_normalize_link(state->md->lib, state->arena, dr.str, &norm) &&
                 mdit_validate_link(norm)) {
                 href = norm;
                 cursor = dr.pos;
@@ -1606,7 +1607,7 @@ static bool inline_image(mdit_state_inline *state, bool silent)
         cursor = li_skip_ws_inc_lf(src, cursor, maximum);
 
         mdit_link_title_result tr;
-        if (mdit_parse_link_title(state->arena, src,
+        if (mdit_parse_link_title(state->md->lib, state->arena, src,
                                   cursor, maximum, NULL, &tr) &&
             cursor < maximum && after_dest != cursor && tr.ok) {
             title = tr.str;
@@ -1640,7 +1641,7 @@ static bool inline_image(mdit_state_inline *state, bool silent)
             label = (mdit_str){ src.data + label_start, label_end - label_start };
         }
 
-        mdit_str norm = mdit_env_normalize_reference(state->arena, label);
+        mdit_str norm = mdit_env_normalize_reference(state->md->lib, state->arena, label);
         const mdit_reference *ref = mdit_env_get_reference(env, norm);
         if (ref == NULL) {
             state->pos = old_pos;
@@ -1655,7 +1656,7 @@ static bool inline_image(mdit_state_inline *state, bool silent)
                                        label_end - label_start };
 
         /* Parse content as a fully-isolated inline tree. */
-        mdit_token *fake_parent = mdit_token_new(state->arena,
+        mdit_token *fake_parent = mdit_token_new(state->md->lib, state->arena,
             MDIT_STR_LIT(""), MDIT_STR_LIT(""), 0);
         if (fake_parent == NULL) return false;
         if (!mdit_parser_inline_parse(p, content, state->md, state->env,

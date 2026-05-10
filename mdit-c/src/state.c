@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "main.h"
 #include "vec.h"
 
 /* Per-line cache vec. The DECLARE lives in state.h so other modules
@@ -61,11 +62,11 @@ bool mdit_state_block_init(mdit_state_block *s,
     /* Build the per-line caches. We accumulate into typed vecs first
      * and then snapshot the data pointers + length into the state. */
     mdit_vec_int32 b, e, ts, sc, bsc;
-    mdit_vec_int32_init(&b,   arena);
-    mdit_vec_int32_init(&e,   arena);
-    mdit_vec_int32_init(&ts,  arena);
-    mdit_vec_int32_init(&sc,  arena);
-    mdit_vec_int32_init(&bsc, arena);
+    mdit_vec_int32_init(&b,   md->lib, arena);
+    mdit_vec_int32_init(&e,   md->lib, arena);
+    mdit_vec_int32_init(&ts,  md->lib, arena);
+    mdit_vec_int32_init(&sc,  md->lib, arena);
+    mdit_vec_int32_init(&bsc, md->lib, arena);
 
     bool indent_found = false;
     int32_t start = 0, indent = 0, offset = 0;
@@ -119,7 +120,7 @@ mdit_token *mdit_state_block_push(mdit_state_block *s,
 {
     mdit_token *t = mdit_vec_token_emplace(s->tokens);
     if (t == NULL) return NULL;
-    mdit_token_init(t, s->arena, type, tag, nesting);
+    mdit_token_init(t, s->md->lib, s->arena, type, tag, nesting);
     t->block = true;
     if (nesting < 0) --s->level;
     t->level = s->level;
@@ -255,8 +256,8 @@ void mdit_state_inline_init(mdit_state_inline *s,
     mdit_buf_init(&s->pending);
 
     s->delimiters = (mdit_vec_delimiter *)
-        mdit_arena_alloc(arena, sizeof *s->delimiters);
-    mdit_vec_delimiter_init(s->delimiters, arena);
+        mdit_arena_alloc(md->lib, arena, sizeof *s->delimiters);
+    mdit_vec_delimiter_init(s->delimiters, md->lib, arena);
 
     s->delim_stack       = NULL;
     s->delim_stack_len   = 0;
@@ -336,7 +337,7 @@ mdit_token *mdit_state_inline_push_pending(mdit_state_inline *s)
     /* Copy pending bytes into the arena so the token retains a stable
      * view after the pending buffer is reset. */
     if (s->pending.len > 0) {
-        char *buf = (char *)mdit_arena_alloc(s->arena, s->pending.len);
+        char *buf = (char *)mdit_arena_alloc(s->md->lib, s->arena, s->pending.len);
         memcpy(buf, s->pending.data, s->pending.len);
         t->content.data = buf;
         t->content.len  = s->pending.len;
@@ -373,9 +374,9 @@ mdit_token *mdit_state_inline_push(mdit_state_inline *s,
         ++s->level;
         (void)stk_push_delim(s, s->delimiters);
         mdit_vec_delimiter *fresh = (mdit_vec_delimiter *)
-            mdit_arena_alloc(s->arena, sizeof *fresh);
+            mdit_arena_alloc(s->md->lib, s->arena, sizeof *fresh);
         if (fresh == NULL) return NULL;
-        mdit_vec_delimiter_init(fresh, s->arena);
+        mdit_vec_delimiter_init(fresh, s->md->lib, s->arena);
         s->delimiters = fresh;
         meta_for_token = fresh;
     }

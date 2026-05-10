@@ -31,6 +31,7 @@
 #include "json.h"
 #include "linkifier.h"
 #include "main.h"
+#include "mdit/mdit_lib_ctx.h"
 #include "ruler.h"
 #include "str.h"
 #include "token.h"
@@ -599,13 +600,15 @@ static void run_source(const char *source)
         row_config cfg;
         row_config_extract(line, line_len, &cfg);
 
+        mdit_lib_ctx lib;
+        mdit_lib_ctx_init_defaults(&lib);
         mdit_arena a;
         mdit_arena_init(&a, 0);
         mdit_md md;
-        if (!mdit_md_init(&md, &a)) {
+        if (!mdit_md_init(&md, &lib, &a)) {
             ++g_total_failures;
             free(input_str);
-            mdit_arena_destroy(&a);
+            mdit_arena_destroy(&lib, &a);
             fprintf(stderr, "  [%s] case %zu: mdit_md_init failed\n",
                     source, case_idx);
             continue;
@@ -618,7 +621,7 @@ static void run_source(const char *source)
         mdit_linkifier_default_use_full_tlds(false);
 
         mdit_vec_token tokens;
-        mdit_vec_token_init(&tokens, &a);
+        mdit_vec_token_init(&tokens, &lib, &a);
         bool ok = mdit_md_parse(&md, (mdit_str){ input_str, input_len },
                                 NULL, &tokens);
         if (!ok) {
@@ -626,7 +629,7 @@ static void run_source(const char *source)
             mdit_md_destroy(&md);
             mdit_linkifier_default_use_full_tlds(prev_full_tlds);
             free(input_str);
-            mdit_arena_destroy(&a);
+            mdit_arena_destroy(&lib, &a);
             fprintf(stderr, "  [%s] case %zu: mdit_md_parse failed\n",
                     source, case_idx);
             continue;
@@ -640,7 +643,7 @@ static void run_source(const char *source)
             mdit_md_destroy(&md);
             mdit_linkifier_default_use_full_tlds(prev_full_tlds);
             free(input_str);
-            mdit_arena_destroy(&a);
+            mdit_arena_destroy(&lib, &a);
             fprintf(stderr, "  [%s] case %zu: token serialization failed\n",
                     source, case_idx);
             continue;
@@ -658,7 +661,7 @@ static void run_source(const char *source)
         mdit_md_destroy(&md);
         mdit_linkifier_default_use_full_tlds(prev_full_tlds);
         free(input_str);
-        mdit_arena_destroy(&a);
+        mdit_arena_destroy(&lib, &a);
     }
     free(buf);
 }

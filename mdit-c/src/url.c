@@ -49,14 +49,15 @@ static int hex_value(unsigned char c)
  * Substring helpers — duplicate a slice into the arena to give callers
  * a stable view independent of the input lifetime.
  * ------------------------------------------------------------------- */
-static mdit_str dup_slice(mdit_arena *a, const char *src, size_t off, size_t len)
+static mdit_str dup_slice(mdit_lib_ctx *lib, mdit_arena *a,
+                          const char *src, size_t off, size_t len)
 {
     mdit_str s; s.data = NULL; s.len = 0;
     if (len == 0) {
         s.data = "";
         return s;
     }
-    char *buf = (char *)mdit_arena_alloc(a, len);
+    char *buf = (char *)mdit_arena_alloc(lib, a, len);
     memcpy(buf, src + off, len);
     s.data = buf;
     s.len  = len;
@@ -295,7 +296,7 @@ static bool has_auth_prefix(const char *s, size_t len)
  * parse_host — splits "host[:port]" via the PORT_PATTERN regex
  * ``:[0-9]*$``. Sets the ``port`` and ``hostname`` fields.
  * ------------------------------------------------------------------- */
-static void parse_host(mdit_arena *a, mdit_url *u,
+static void parse_host(mdit_lib_ctx *lib, mdit_arena *a, mdit_url *u,
                        const char *host, size_t host_len)
 {
     /* Python regex `:[0-9]*$` matches a colon followed by zero or more
@@ -309,13 +310,13 @@ static void parse_host(mdit_arena *a, mdit_url *u,
          * but still strips the colon from the host. */
         if (port_chars > 0) {
             u->has_port = true;
-            u->port     = dup_slice(a, host, i, port_chars);
+            u->port     = dup_slice(lib, a, host, i, port_chars);
         }
         host_len = colon_pos;
     }
     if (host_len > 0) {
         u->has_hostname = true;
-        u->hostname     = dup_slice(a, host, 0, host_len);
+        u->hostname     = dup_slice(lib, a, host, 0, host_len);
     }
 }
 
@@ -325,7 +326,8 @@ static void parse_host(mdit_arena *a, mdit_url *u,
  * Mirrors ``MutableURL.parse(self, url, slashes_denote_host)`` and the
  * ``url_parse`` shim that wraps it.
  * ------------------------------------------------------------------- */
-bool mdit_url_parse(mdit_arena *arena,
+bool mdit_url_parse(mdit_lib_ctx *lib,
+                    mdit_arena *arena,
                     mdit_str input,
                     bool slashes_denote_host,
                     mdit_url *out)
@@ -346,10 +348,10 @@ bool mdit_url_parse(mdit_arena *arena,
             size_t plen = 0, slen = 0;
             if (simple_path_match(src, n, &plen, &slen)) {
                 out->has_pathname = true;
-                out->pathname     = dup_slice(arena, src, 0, plen);
+                out->pathname     = dup_slice(lib, arena, src, 0, plen);
                 if (slen > 0) {
                     out->has_search = true;
-                    out->search     = dup_slice(arena, src, plen, slen);
+                    out->search     = dup_slice(lib, arena, src, plen, slen);
                 }
                 return true;
             }
@@ -364,7 +366,7 @@ bool mdit_url_parse(mdit_arena *arena,
     size_t      proto_len = pmatch;
     if (pmatch > 0) {
         out->has_protocol = true;
-        out->protocol     = dup_slice(arena, src, 0, pmatch);
+        out->protocol     = dup_slice(lib, arena, src, 0, pmatch);
         src += pmatch; n -= pmatch;
     }
 
@@ -396,7 +398,7 @@ bool mdit_url_parse(mdit_arena *arena,
 
         if (at_sign != -1) {
             out->has_auth = true;
-            out->auth     = dup_slice(arena, src, 0, (size_t)at_sign);
+            out->auth     = dup_slice(lib, arena, src, 0, (size_t)at_sign);
             src += (size_t)at_sign + 1;
             n   -= (size_t)at_sign + 1;
         }
@@ -420,7 +422,7 @@ bool mdit_url_parse(mdit_arena *arena,
         size_t      rest_after_host_len = n - (size_t)host_end;
 
         /* Pull port out of host */
-        parse_host(arena, out, host, host_len);
+        parse_host(lib, arena, out, host, host_len);
 
         /* "even if it's empty, it has to be present" */
         if (!out->has_hostname) {
@@ -454,7 +456,7 @@ bool mdit_url_parse(mdit_arena *arena,
                         char tmp_stack[64];
                         char *tmp = (plen <= sizeof tmp_stack)
                             ? tmp_stack
-                            : (char *)mdit_arena_alloc(arena, plen);
+                            : (char *)mdit_arena_alloc(lib, arena, plen);
                         for (size_t k = 0; k < plen; ++k) {
                             unsigned char b = (unsigned char)hp[part_start + k];
                             tmp[k] = (b > 127) ? 'x' : (char)b;
@@ -495,7 +497,7 @@ bool mdit_url_parse(mdit_arena *arena,
                              * allocated buffer. We arena-copy so the ptr is
                              * stable. */
                             char *rest_mut =
-                                (char *)mdit_arena_alloc(arena, nb.len + 1);
+                                (char *)mdit_arena_alloc(lib, arena, nb.len + 1);
                             memcpy(rest_mut, nb.data, nb.len);
                             rest_mut[nb.len] = '\0';
                             rest_after_host     = rest_mut;
@@ -504,7 +506,7 @@ bool mdit_url_parse(mdit_arena *arena,
 
                             /* Truncate hostname to valid_parts join '.' */
                             char *hn_mut =
-                                (char *)mdit_arena_alloc(arena, valid_end);
+                                (char *)mdit_arena_alloc(lib, arena, valid_end);
                             memcpy(hn_mut, hp, valid_end);
                             out->hostname.data = hn_mut;
                             out->hostname.len = valid_end;
@@ -541,7 +543,7 @@ bool mdit_url_parse(mdit_arena *arena,
                           ((const char *)memchr(src, '#', n)) - src : -1);
     if (hash_idx != -1) {
         out->has_hash = true;
-        out->hash     = dup_slice(arena, src,
+        out->hash     = dup_slice(lib, arena, src,
                                   (size_t)hash_idx, n - (size_t)hash_idx);
         n = (size_t)hash_idx;
     }
@@ -550,14 +552,14 @@ bool mdit_url_parse(mdit_arena *arena,
                         ((const char *)memchr(src, '?', n)) - src : -1);
     if (qm_idx != -1) {
         out->has_search = true;
-        out->search     = dup_slice(arena, src,
+        out->search     = dup_slice(lib, arena, src,
                                     (size_t)qm_idx, n - (size_t)qm_idx);
         n = (size_t)qm_idx;
     }
 
     if (n > 0) {
         out->has_pathname = true;
-        out->pathname     = dup_slice(arena, src, 0, n);
+        out->pathname     = dup_slice(lib, arena, src, 0, n);
     }
 
     /* SLASHED_PROTOCOL[lower_proto] && hostname && !pathname → pathname = "" */

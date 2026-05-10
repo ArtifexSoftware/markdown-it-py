@@ -20,15 +20,16 @@ void *mdit_vec_core_reserve(mdit_vec_core *v, size_t want_cap)
     }
 
     if (v->arena != NULL) {
+        if (v->lib == NULL) return NULL;
         if (v->data == NULL) {
-            v->data = mdit_arena_alloc(v->arena, bytes);
+            v->data = mdit_arena_alloc(v->lib, v->arena, bytes);
             v->cap  = want_cap;
             return v->data;
         }
         /* Try to grow in place at the arena tail. */
         size_t old_bytes = v->cap * v->elem;
         void *p = v->data;
-        if (mdit_arena_try_extend(v->arena, &p, old_bytes, bytes)) {
+        if (mdit_arena_try_extend(v->lib, v->arena, &p, old_bytes, bytes)) {
             v->data = p;
             v->cap  = want_cap;
             return v->data;
@@ -36,7 +37,7 @@ void *mdit_vec_core_reserve(mdit_vec_core *v, size_t want_cap)
         /* Otherwise, allocate a fresh slab and copy. The previous
          * allocation is leaked into the arena until reset(); that is
          * the trade we accept for not having a true free(). */
-        void *fresh = mdit_arena_alloc(v->arena, bytes);
+        void *fresh = mdit_arena_alloc(v->lib, v->arena, bytes);
         if (v->len > 0) {
             memcpy(fresh, v->data, v->len * v->elem);
         }

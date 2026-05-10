@@ -9,16 +9,19 @@
 #include "json.h"
 #include "linkifier.h"
 #include "main.h"
+#include "mdit/mdit_lib_ctx.h"
 
 #include "block_oracle.h"
 
 static void run_case(const mdit_block_oracle_case *c)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a;
     mdit_arena_init(&a, 0);
     mdit_md md;
-    if (!mdit_md_init(&md, &a)) {
-        mdit_arena_destroy(&a);
+    if (!mdit_md_init(&md, &lib, &a)) {
+        mdit_arena_destroy(&lib, &a);
         MDIT_FAIL("mdit_md_init");
     }
     if (c->opts & MDIT_BLOCK_ORACLE_OPT_HTML) md.options.html = true;
@@ -54,7 +57,7 @@ static void run_case(const mdit_block_oracle_case *c)
     if (!ok) {
         mdit_buf_destroy(&out);
         mdit_md_destroy(&md);
-        mdit_arena_destroy(&a);
+        mdit_arena_destroy(&lib, &a);
         MDIT_FAIL("mdit_md_render");
     }
     if (out.len != c->html_len ||
@@ -68,12 +71,12 @@ static void run_case(const mdit_block_oracle_case *c)
                  (int)c->html_len,         c->html);
         mdit_buf_destroy(&out);
         mdit_md_destroy(&md);
-        mdit_arena_destroy(&a);
+        mdit_arena_destroy(&lib, &a);
         MDIT_FAIL(msg);
     }
     mdit_buf_destroy(&out);
     mdit_md_destroy(&md);
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
     mdit_linkifier_default_use_full_tlds(prev_full_tlds);
 }
 

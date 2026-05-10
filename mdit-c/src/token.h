@@ -70,7 +70,8 @@ typedef struct mdit_token {
     size_t             children_cap;
 
     /* Backing arena for any growth (attrs/meta/children). Borrowed. */
-    mdit_arena *arena;
+    mdit_lib_ctx *lib;
+    mdit_arena   *arena;
 } mdit_token;
 
 /* Typed dynamic array of tokens — used by the parsers and by callers
@@ -86,11 +87,11 @@ MDIT_VEC_DECLARE(token, mdit_token)
  * values into a caller-provided slot. There is no destroy: arena reset
  * tears the whole tree down at once.
  * ------------------------------------------------------------------- */
-void mdit_token_init(mdit_token *t, mdit_arena *arena,
+void mdit_token_init(mdit_token *t, mdit_lib_ctx *lib, mdit_arena *arena,
                      mdit_str type, mdit_str tag, int8_t nesting);
 
 /* Convenience: allocate-and-init a single token in the arena. */
-mdit_token *mdit_token_new(mdit_arena *arena,
+mdit_token *mdit_token_new(mdit_lib_ctx *lib, mdit_arena *arena,
                            mdit_str type, mdit_str tag, int8_t nesting);
 
 /* ---------------------------------------------------------------------

@@ -104,16 +104,17 @@ typedef struct mdit_linkify_match {
 
 typedef struct mdit_linkifier {
     void *self;
-    bool (*pretest)       (void *self, mdit_str text);
-    bool (*test)          (void *self, mdit_str text);
-    bool (*match_at_start)(void *self, mdit_arena *arena,
+    bool (*pretest)       (void *self, mdit_lib_ctx *lib, mdit_str text);
+    bool (*test)          (void *self, mdit_lib_ctx *lib, mdit_str text);
+    bool (*match_at_start)(void *self, mdit_lib_ctx *lib, mdit_arena *arena,
                            mdit_str text, mdit_linkify_match *out);
     /* Returns count; *out is set to an arena-allocated array. */
-    size_t (*match_all)   (void *self, mdit_arena *arena,
+    size_t (*match_all)   (void *self, mdit_lib_ctx *lib, mdit_arena *arena,
                            mdit_str text, mdit_linkify_match **out);
 } mdit_linkifier;
 
 typedef struct mdit_md {
+    mdit_lib_ctx       *lib;       /* borrowed — allocators + OOM */
     mdit_arena         *arena;     /* borrowed */
     mdit_options        options;
     mdit_parser_core    core;
@@ -126,7 +127,7 @@ typedef struct mdit_md {
 } mdit_md;
 
 /* Initialize a MarkdownIt with default options + built-in rules. */
-bool mdit_md_init   (mdit_md *md, mdit_arena *arena);
+bool mdit_md_init   (mdit_md *md, mdit_lib_ctx *lib, mdit_arena *arena);
 void mdit_md_destroy(mdit_md *md);
 
 /* Install a linkifier vtable. Pass NULL to clear. */

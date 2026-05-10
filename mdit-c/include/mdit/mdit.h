@@ -29,6 +29,8 @@ extern "C" {
 #  define MDIT_API
 #endif
 
+#include "mdit_lib_ctx.h"
+
 /* --- Versioning ---------------------------------------------------------- */
 #define MDIT_VERSION_MAJOR 0
 #define MDIT_VERSION_MINOR 0

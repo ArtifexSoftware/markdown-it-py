@@ -5,25 +5,27 @@
 #include "escape.h"
 #include "json.h"
 
-static mdit_str arena_copy(mdit_arena *arena, const char *data, size_t len)
+static mdit_str arena_copy(mdit_lib_ctx *lib, mdit_arena *arena,
+                           const char *data, size_t len)
 {
     if (len == 0) return MDIT_STR_LIT("");
-    char *buf = (char *)mdit_arena_alloc(arena, len);
+    char *buf = (char *)mdit_arena_alloc(lib, arena, len);
     memcpy(buf, data, len);
     return (mdit_str){ buf, len };
 }
 
-static bool unescape_to_arena(mdit_arena *arena, mdit_str input, mdit_str *out)
+static bool unescape_to_arena(mdit_lib_ctx *lib, mdit_arena *arena,
+                              mdit_str input, mdit_str *out)
 {
     mdit_buf b;
     mdit_buf_init(&b);
     bool ok = mdit_unescape_all(input, &b);
-    if (ok) *out = arena_copy(arena, b.data ? b.data : "", b.len);
+    if (ok) *out = arena_copy(lib, arena, b.data ? b.data : "", b.len);
     mdit_buf_destroy(&b);
     return ok;
 }
 
-bool mdit_parse_link_destination(mdit_arena *arena,
+bool mdit_parse_link_destination(mdit_lib_ctx *lib, mdit_arena *arena,
                                  mdit_str input,
                                  size_t pos,
                                  size_t maximum,
@@ -42,7 +44,7 @@ bool mdit_parse_link_destination(mdit_arena *arena,
             if (code == '>') {
                 out->pos = pos + 1;
                 out->ok = unescape_to_arena(
-                    arena,
+                    lib, arena,
                     (mdit_str){ input.data + start + 1, pos - start - 1 },
                     &out->str);
                 return out->ok;
@@ -82,13 +84,13 @@ bool mdit_parse_link_destination(mdit_arena *arena,
 
     out->pos = pos;
     out->ok = unescape_to_arena(
-        arena,
+        lib, arena,
         (mdit_str){ input.data + start, pos - start },
         &out->str);
     return out->ok;
 }
 
-bool mdit_parse_link_title(mdit_arena *arena,
+bool mdit_parse_link_title(mdit_lib_ctx *lib, mdit_arena *arena,
                            mdit_str input,
                            size_t start,
                            size_t maximum,
@@ -126,7 +128,7 @@ bool mdit_parse_link_title(mdit_arena *arena,
                 ok = mdit_unescape_all(
                     (mdit_str){ input.data + start, pos - start }, &b);
             }
-            if (ok) out->str = arena_copy(arena, b.data ? b.data : "", b.len);
+            if (ok) out->str = arena_copy(lib, arena, b.data ? b.data : "", b.len);
             mdit_buf_destroy(&b);
             if (!ok) return false;
             out->pos = pos + 1;
@@ -146,7 +148,7 @@ bool mdit_parse_link_title(mdit_arena *arena,
         ok = mdit_unescape_all(
             (mdit_str){ input.data + start, pos - start }, &b);
     }
-    if (ok) out->str = arena_copy(arena, b.data ? b.data : "", b.len);
+    if (ok) out->str = arena_copy(lib, arena, b.data ? b.data : "", b.len);
     mdit_buf_destroy(&b);
     if (!ok) return false;
     out->can_continue = true;

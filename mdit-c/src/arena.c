@@ -1,15 +1,14 @@
 /*
  * arena.c — bump allocator implementation.
  *
- * Layout: each chunk is a single malloc, with a header followed by the
- * payload. The arena keeps a singly-linked list with the *most recent*
- * chunk at ``head``; older chunks are kept around so existing pointers
- * stay valid until reset/destroy.
+ * Layout: each chunk is a single allocation via ctx->alloc, with a
+ * header followed by the payload. The arena keeps a singly-linked list
+ * with the *most recent* chunk at ``head``; older chunks are kept around
+ * so existing pointers stay valid until reset/destroy.
  */
 #include "arena.h"
 
 #include <assert.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -27,28 +26,11 @@ struct mdit_arena_chunk {
      * aligned (we pad capacity below to honour MDIT_ARENA_ALIGN). */
 };
 
-/* ---------------------------------------------------------------------
- * OOM handling
- * ------------------------------------------------------------------- */
-static void default_oom_handler(size_t requested)
+static void oom(mdit_lib_ctx *ctx, size_t requested)
 {
-    (void)fprintf(stderr,
-                  "mdit-c: arena allocation failed (requested %zu bytes)\n",
-                  requested);
-    abort();
-}
-
-static mdit_arena_oom_fn s_oom_handler = default_oom_handler;
-
-void mdit_arena_set_oom_handler(mdit_arena_oom_fn fn)
-{
-    s_oom_handler = fn ? fn : default_oom_handler;
-}
-
-static void oom(size_t requested)
-{
-    s_oom_handler(requested);
-    /* If a test handler returns, fall through to abort to avoid UB. */
+    assert(ctx != NULL && ctx->oom != NULL);
+    ctx->oom(ctx->user, requested);
+    /* If a test handler returns, fall through to avoid UB. */
     abort();
 }
 
@@ -78,8 +60,10 @@ static MDIT_INLINE unsigned char *chunk_payload(mdit_arena_chunk *c)
     return (unsigned char *)c + header_size();
 }
 
-static mdit_arena_chunk *new_chunk(size_t payload_cap)
+static mdit_arena_chunk *new_chunk(mdit_lib_ctx *ctx, size_t payload_cap)
 {
+    assert(ctx != NULL && ctx->alloc != NULL);
+
     /* Always allocate at least one cache line of payload. */
     if (payload_cap < 64) payload_cap = 64;
     payload_cap = round_up_align(payload_cap, MDIT_ARENA_ALIGN);
@@ -88,12 +72,13 @@ static mdit_arena_chunk *new_chunk(size_t payload_cap)
     /* Overflow check: header_size() is a small constant, so any overflow
      * here means payload_cap was already absurd. */
     if (total < payload_cap) {
-        oom(payload_cap);
+        oom(ctx, payload_cap);
     }
 
-    mdit_arena_chunk *c = (mdit_arena_chunk *)malloc(total);
+    mdit_arena_chunk *c =
+        (mdit_arena_chunk *)ctx->alloc(ctx->user, total);
     if (c == NULL) {
-        oom(total);
+        oom(ctx, total);
     }
     c->next = NULL;
     c->cap  = payload_cap;
@@ -137,13 +122,14 @@ void mdit_arena_init(mdit_arena *a, size_t initial_chunk_size)
     a->num_chunks     = 0;
 }
 
-void mdit_arena_destroy(mdit_arena *a)
+void mdit_arena_destroy(mdit_lib_ctx *ctx, mdit_arena *a)
 {
+    assert(ctx != NULL && ctx->free_fn != NULL);
     if (a == NULL) return;
     mdit_arena_chunk *c = a->head;
     while (c != NULL) {
         mdit_arena_chunk *next = c->next;
-        free(c);
+        ctx->free_fn(ctx->user, c);
         c = next;
     }
     a->head           = NULL;
@@ -153,8 +139,9 @@ void mdit_arena_destroy(mdit_arena *a)
     a->num_chunks     = 0;
 }
 
-void mdit_arena_reset(mdit_arena *a)
+void mdit_arena_reset(mdit_lib_ctx *ctx, mdit_arena *a)
 {
+    assert(ctx != NULL && ctx->free_fn != NULL);
     if (a == NULL || a->head == NULL) {
         if (a != NULL) {
             a->total_used = 0;
@@ -174,7 +161,7 @@ void mdit_arena_reset(mdit_arena *a)
     while (c != NULL) {
         mdit_arena_chunk *next = c->next;
         if (c != biggest) {
-            free(c);
+            ctx->free_fn(ctx->user, c);
         }
         c = next;
     }
@@ -193,9 +180,10 @@ void mdit_arena_reset(mdit_arena *a)
 /* ---------------------------------------------------------------------
  * Allocation
  * ------------------------------------------------------------------- */
-static void *raw_alloc(mdit_arena *a, size_t n, size_t alignment)
+static void *raw_alloc(mdit_lib_ctx *ctx, mdit_arena *a, size_t n,
+                       size_t alignment)
 {
-    assert(a != NULL);
+    assert(ctx != NULL && a != NULL);
     assert(is_pow2(alignment));
 
     /* Bump zero-byte requests to one byte so adjacent zero-sized
@@ -209,7 +197,7 @@ static void *raw_alloc(mdit_arena *a, size_t n, size_t alignment)
      * <= MDIT_ARENA_ALIGN is free. */
     if (a->head == NULL) {
         size_t want = pick_chunk_size(alloc_n, a->next_chunk);
-        a->head = new_chunk(want);
+        a->head = new_chunk(ctx, want);
         a->total_capacity += a->head->cap;
         a->num_chunks     += 1;
         if (a->next_chunk < MDIT_ARENA_CHUNK_MAX) {
@@ -225,7 +213,7 @@ static void *raw_alloc(mdit_arena *a, size_t n, size_t alignment)
     if (aligned_used > c->cap || c->cap - aligned_used < alloc_n) {
         /* Fresh chunk needed. */
         size_t want = pick_chunk_size(alloc_n, a->next_chunk);
-        mdit_arena_chunk *fresh = new_chunk(want);
+        mdit_arena_chunk *fresh = new_chunk(ctx, want);
         fresh->next = c;
         a->head = fresh;
         a->total_capacity += fresh->cap;
@@ -246,53 +234,55 @@ static void *raw_alloc(mdit_arena *a, size_t n, size_t alignment)
     return out;
 }
 
-void *mdit_arena_alloc(mdit_arena *a, size_t n)
+void *mdit_arena_alloc(mdit_lib_ctx *ctx, mdit_arena *a, size_t n)
 {
-    return raw_alloc(a, n, MDIT_ARENA_ALIGN);
+    return raw_alloc(ctx, a, n, MDIT_ARENA_ALIGN);
 }
 
-void *mdit_arena_zalloc(mdit_arena *a, size_t n)
+void *mdit_arena_zalloc(mdit_lib_ctx *ctx, mdit_arena *a, size_t n)
 {
-    void *p = raw_alloc(a, n, MDIT_ARENA_ALIGN);
+    void *p = raw_alloc(ctx, a, n, MDIT_ARENA_ALIGN);
     if (n != 0) {
         memset(p, 0, n);
     }
     return p;
 }
 
-void *mdit_arena_alloc_aligned(mdit_arena *a, size_t n, size_t alignment)
+void *mdit_arena_alloc_aligned(mdit_lib_ctx *ctx, mdit_arena *a, size_t n,
+                                 size_t alignment)
 {
     if (alignment == 0) alignment = MDIT_ARENA_ALIGN;
     if (!is_pow2(alignment)) {
-        oom(n); /* programming error; treat as fatal in debug builds */
+        oom(ctx, n); /* programming error; treat as fatal */
     }
     if (alignment < MDIT_ARENA_ALIGN) alignment = MDIT_ARENA_ALIGN;
-    return raw_alloc(a, n, alignment);
+    return raw_alloc(ctx, a, n, alignment);
 }
 
-void *mdit_arena_dup(mdit_arena *a, const void *data, size_t n)
+void *mdit_arena_dup(mdit_lib_ctx *ctx, mdit_arena *a, const void *data,
+                     size_t n)
 {
-    void *p = mdit_arena_alloc(a, n);
+    void *p = mdit_arena_alloc(ctx, a, n);
     if (n != 0 && data != NULL) {
         memcpy(p, data, n);
     }
     return p;
 }
 
-char *mdit_arena_strdup(mdit_arena *a, const char *s)
+char *mdit_arena_strdup(mdit_lib_ctx *ctx, mdit_arena *a, const char *s)
 {
     if (s == NULL) return NULL;
     size_t len = strlen(s);
-    char *out  = (char *)mdit_arena_alloc(a, len + 1);
+    char *out  = (char *)mdit_arena_alloc(ctx, a, len + 1);
     memcpy(out, s, len);
     out[len] = '\0';
     return out;
 }
 
-bool mdit_arena_try_extend(mdit_arena *a, void **ptr,
+bool mdit_arena_try_extend(mdit_lib_ctx *ctx, mdit_arena *a, void **ptr,
                            size_t old_size, size_t new_size)
 {
-    assert(a != NULL && ptr != NULL);
+    assert(ctx != NULL && a != NULL && ptr != NULL);
     if (a->head == NULL || *ptr == NULL) return false;
     if (new_size <= old_size) {
         /* Trivially fits; just lie and report success without moving. */

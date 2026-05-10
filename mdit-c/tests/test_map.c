@@ -5,6 +5,7 @@
 
 #include "arena.h"
 #include "map.h"
+#include "mdit/mdit_lib_ctx.h"
 #include "str.h"
 
 #include <string.h>
@@ -12,7 +13,7 @@
 MDIT_TEST(map_set_get_basic)
 {
     mdit_map m;
-    mdit_map_init(&m, NULL);
+    mdit_map_init(&m, NULL, NULL);
 
     MDIT_ASSERT_TRUE(mdit_map_set_z(&m, "href", mdit_value_cstr("/url")));
     MDIT_ASSERT_TRUE(mdit_map_set_z(&m, "title", mdit_value_cstr("hello")));
@@ -34,7 +35,7 @@ MDIT_TEST(map_set_get_basic)
 MDIT_TEST(map_overwrite_preserves_order)
 {
     mdit_map m;
-    mdit_map_init(&m, NULL);
+    mdit_map_init(&m, NULL, NULL);
     mdit_map_set_z(&m, "a", mdit_value_int(1));
     mdit_map_set_z(&m, "b", mdit_value_int(2));
     mdit_map_set_z(&m, "c", mdit_value_int(3));
@@ -51,7 +52,7 @@ MDIT_TEST(map_overwrite_preserves_order)
 MDIT_TEST(map_delete_keeps_order)
 {
     mdit_map m;
-    mdit_map_init(&m, NULL);
+    mdit_map_init(&m, NULL, NULL);
     mdit_map_set_z(&m, "a", mdit_value_int(1));
     mdit_map_set_z(&m, "b", mdit_value_int(2));
     mdit_map_set_z(&m, "c", mdit_value_int(3));
@@ -67,15 +68,17 @@ MDIT_TEST(map_delete_keeps_order)
 
 MDIT_TEST(map_arena_backed)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a;
     mdit_arena_init(&a, 0);
     mdit_map m;
-    mdit_map_init(&m, &a);
+    mdit_map_init(&m, &lib, &a);
     /* Push enough entries to force at least a couple of growths. */
     char keybuf[32];
     for (int i = 0; i < 64; ++i) {
         snprintf(keybuf, sizeof keybuf, "k%d", i);
-        char *owned = mdit_arena_strdup(&a, keybuf);
+        char *owned = mdit_arena_strdup(&lib, &a, keybuf);
         mdit_map_set_z(&m, owned, mdit_value_int(i));
     }
     MDIT_ASSERT_EQ_SZ(mdit_map_len(&m), 64);
@@ -85,13 +88,13 @@ MDIT_TEST(map_arena_backed)
     MDIT_ASSERT_NE(v, NULL);
     MDIT_ASSERT_EQ_INT(v->u.i, 42);
     mdit_map_destroy(&m);
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 MDIT_TEST(map_value_kinds)
 {
     mdit_map m;
-    mdit_map_init(&m, NULL);
+    mdit_map_init(&m, NULL, NULL);
     mdit_map_set_z(&m, "n",  mdit_value_null());
     mdit_map_set_z(&m, "b",  mdit_value_bool(true));
     mdit_map_set_z(&m, "i",  mdit_value_int(-7));

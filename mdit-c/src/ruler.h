@@ -65,7 +65,7 @@ typedef struct mdit_ruler  mdit_ruler;
 /* ---------------------------------------------------------------------
  * Lifecycle
  * ------------------------------------------------------------------- */
-mdit_ruler *mdit_ruler_new   (mdit_arena *arena);
+mdit_ruler *mdit_ruler_new   (mdit_lib_ctx *lib, mdit_arena *arena);
 void        mdit_ruler_destroy(mdit_ruler *r);  /* idempotent */
 
 /* ---------------------------------------------------------------------

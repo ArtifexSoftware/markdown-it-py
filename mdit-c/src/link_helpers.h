@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "arena.h"
+#include "mdit/mdit_lib_ctx.h"
 #include "str.h"
 
 #ifdef __cplusplus
@@ -26,13 +27,13 @@ typedef struct mdit_link_title_result {
     uint32_t marker;
 } mdit_link_title_result;
 
-bool mdit_parse_link_destination(mdit_arena *arena,
+bool mdit_parse_link_destination(mdit_lib_ctx *lib, mdit_arena *arena,
                                  mdit_str input,
                                  size_t pos,
                                  size_t maximum,
                                  mdit_link_destination_result *out);
 
-bool mdit_parse_link_title(mdit_arena *arena,
+bool mdit_parse_link_title(mdit_lib_ctx *lib, mdit_arena *arena,
                            mdit_str input,
                            size_t start,
                            size_t maximum,

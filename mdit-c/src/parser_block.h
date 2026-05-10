@@ -23,12 +23,14 @@ extern "C" {
 typedef bool (*mdit_block_rule_fn)(mdit_state_block *state);
 
 typedef struct mdit_parser_block {
-    mdit_ruler *ruler;
-    mdit_arena *arena;     /* shared with the owning MarkdownIt */
+    mdit_ruler   *ruler;
+    mdit_lib_ctx *lib;
+    mdit_arena   *arena;     /* shared with the owning MarkdownIt */
 } mdit_parser_block;
 
 /* Lifecycle. ``arena`` must outlive the parser. */
-bool mdit_parser_block_init   (mdit_parser_block *p, mdit_arena *arena);
+bool mdit_parser_block_init   (mdit_parser_block *p, mdit_lib_ctx *lib,
+                               mdit_arena *arena);
 void mdit_parser_block_destroy(mdit_parser_block *p);
 
 /* Tokenize the input range. The state must already be initialized via

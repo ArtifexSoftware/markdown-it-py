@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "arena.h"
+#include "mdit/mdit_lib_ctx.h"
 #include "json.h"
 #include "punycode.h"
 #include "str.h"
@@ -160,11 +161,13 @@ MDIT_TEST(punycode_decode_rejects_malformed)
 static void check_idn_ascii(const char *in, size_t in_len,
                             const char *want, size_t want_len)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_str input = { in, in_len };
     mdit_str out;
-    if (!mdit_idn_to_ascii(&a, input, &out)) {
-        mdit_arena_destroy(&a);
+    if (!mdit_idn_to_ascii(&lib, &a, input, &out)) {
+        mdit_arena_destroy(&lib, &a);
         mdit_test_fail(__FILE__, __LINE__, "idn_to_ascii: false");
         return;
     }
@@ -175,21 +178,23 @@ static void check_idn_ascii(const char *in, size_t in_len,
             (int)in_len, in,
             (int)out.len, out.data,
             (int)want_len, want);
-        mdit_arena_destroy(&a);
+        mdit_arena_destroy(&lib, &a);
         mdit_test_fail(__FILE__, __LINE__, msg);
         return;
     }
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 static void check_idn_unicode(const char *in, size_t in_len,
                               const char *want, size_t want_len)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_arena a; mdit_arena_init(&a, 0);
     mdit_str input = { in, in_len };
     mdit_str out;
-    if (!mdit_idn_to_unicode(&a, input, &out)) {
-        mdit_arena_destroy(&a);
+    if (!mdit_idn_to_unicode(&lib, &a, input, &out)) {
+        mdit_arena_destroy(&lib, &a);
         mdit_test_fail(__FILE__, __LINE__, "idn_to_unicode: false");
         return;
     }
@@ -200,11 +205,11 @@ static void check_idn_unicode(const char *in, size_t in_len,
             (int)in_len, in,
             (int)out.len, out.data,
             (int)want_len, want);
-        mdit_arena_destroy(&a);
+        mdit_arena_destroy(&lib, &a);
         mdit_test_fail(__FILE__, __LINE__, msg);
         return;
     }
-    mdit_arena_destroy(&a);
+    mdit_arena_destroy(&lib, &a);
 }
 
 #define LIT(x) (x), (sizeof(x) - 1)
