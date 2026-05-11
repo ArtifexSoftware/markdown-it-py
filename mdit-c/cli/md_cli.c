@@ -180,11 +180,11 @@ static int render_one(mdit_ctx    *md,
         if (w != html_len) {
             fprintf(stderr, MD_CLI_PROG_NAME
                     ": short write to stdout.\n");
-            free(html);
+            mdit_free_string(md, html);
             return 2;
         }
     }
-    free(html);
+    mdit_free_string(md, html);
     return 0;
 }
 
@@ -263,7 +263,7 @@ int main(int argc, char **argv)
     int n_files = args.pos_last - args.pos_first;
     bool use_stdin = args.force_stdin || n_files == 0;
 
-    mdit_ctx *md = mdit_new("commonmark");
+    mdit_ctx *md = mdit_new(NULL, "commonmark");
     if (md == NULL) {
         fprintf(stderr, MD_CLI_PROG_NAME ": failed to initialize parser.\n");
         return 2;

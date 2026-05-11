@@ -178,14 +178,26 @@ const char *mdit_version_string(void)
     return k_mdit_version;
 }
 
-mdit_ctx *mdit_new(const char *preset)
+mdit_ctx *mdit_new(const mdit_lib_ctx *lib, const char *preset)
 {
-    mdit_ctx *ctx = (mdit_ctx *)calloc(1, sizeof *ctx);
-    if (ctx == NULL) {
+    mdit_lib_ctx defaults;
+    const mdit_lib_ctx *hooks = lib;
+    if (hooks == NULL) {
+        mdit_lib_ctx_init_defaults(&defaults);
+        hooks = &defaults;
+    }
+    if (hooks->alloc == NULL || hooks->realloc_fn == NULL ||
+        hooks->free_fn == NULL || hooks->oom == NULL) {
         return NULL;
     }
 
-    mdit_lib_ctx_init_defaults(&ctx->lib);
+    mdit_ctx *ctx = (mdit_ctx *)hooks->alloc(hooks->user, sizeof *ctx);
+    if (ctx == NULL) {
+        return NULL;
+    }
+    memset(ctx, 0, sizeof *ctx);
+    ctx->lib = *hooks;
+
     mdit_arena_init(&ctx->arena, 0);
     if (!mdit_md_init(&ctx->engine, &ctx->lib, &ctx->arena)) {
         mdit_free(ctx);
@@ -209,7 +221,7 @@ void mdit_free(mdit_ctx *ctx)
     }
     mdit_md_destroy(&ctx->engine);
     mdit_arena_destroy(&ctx->lib, &ctx->arena);
-    free(ctx);
+    ctx->lib.free_fn(ctx->lib.user, ctx);
 }
 
 static mdit_status mdit_set_option_bool_key(mdit_ctx *ctx, const char *key, int value)
@@ -421,7 +433,7 @@ mdit_status mdit_render(mdit_ctx *ctx, const char *src, size_t n,
     }
 
     size_t rendered_len = rendered.len;
-    char *copy = (char *)malloc(rendered_len + 1);
+    char *copy = (char *)ctx->lib.alloc(ctx->lib.user, rendered_len + 1);
     if (copy == NULL) {
         mdit_buf_destroy(&rendered);
         return MDIT_ERR_OOM;
@@ -437,4 +449,12 @@ mdit_status mdit_render(mdit_ctx *ctx, const char *src, size_t n,
         *out_len = rendered_len;
     }
     return MDIT_OK;
+}
+
+void mdit_free_string(mdit_ctx *ctx, char *p)
+{
+    if (ctx == NULL || p == NULL) {
+        return;
+    }
+    ctx->lib.free_fn(ctx->lib.user, p);
 }

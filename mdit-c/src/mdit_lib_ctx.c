@@ -21,6 +21,12 @@ static void *mdit_lib_ctx_default_alloc(void *user, size_t size)
     return malloc(size);
 }
 
+static void *mdit_lib_ctx_default_realloc(void *user, void *ptr, size_t size)
+{
+    (void)user;
+    return realloc(ptr, size);
+}
+
 static void mdit_lib_ctx_default_free(void *user, void *ptr)
 {
     (void)user;
@@ -28,10 +34,11 @@ static void mdit_lib_ctx_default_free(void *user, void *ptr)
 }
 
 static const mdit_lib_ctx k_mdit_lib_ctx_builtin_default = {
-    .user   = NULL,
-    .alloc  = mdit_lib_ctx_default_alloc,
-    .free_fn = mdit_lib_ctx_default_free,
-    .oom    = mdit_lib_ctx_default_oom,
+    .user       = NULL,
+    .alloc      = mdit_lib_ctx_default_alloc,
+    .realloc_fn = mdit_lib_ctx_default_realloc,
+    .free_fn    = mdit_lib_ctx_default_free,
+    .oom        = mdit_lib_ctx_default_oom,
 };
 
 const mdit_lib_ctx *mdit_lib_ctx_builtin_default(void)

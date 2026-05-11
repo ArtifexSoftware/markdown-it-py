@@ -31,19 +31,22 @@ extern "C" {
 
 /* --- Library runtime context --------------------------------------------- */
 /*
- * Host-provided allocation hooks. `alloc` must return NULL on failure
- * (the library then calls `oom`, which must not return in normal use).
- * `user` is forwarded to every hook.
+ * Host-provided allocation hooks. `alloc` and `realloc_fn` must return
+ * NULL on failure (the library then calls `oom`, which must not return
+ * in normal use). `realloc_fn` follows the usual realloc semantics,
+ * including that `ptr` may be NULL. `user` is forwarded to every hook.
  */
 typedef void (*mdit_lib_oom_fn)(void *user, size_t requested);
 typedef void *(*mdit_lib_alloc_fn)(void *user, size_t size);
+typedef void *(*mdit_lib_realloc_fn)(void *user, void *ptr, size_t size);
 typedef void (*mdit_lib_free_fn)(void *user, void *ptr);
 
 typedef struct mdit_lib_ctx {
-    void               *user;
-    mdit_lib_alloc_fn   alloc;
-    mdit_lib_free_fn    free_fn;
-    mdit_lib_oom_fn     oom;
+    void                 *user;
+    mdit_lib_alloc_fn     alloc;
+    mdit_lib_realloc_fn   realloc_fn;
+    mdit_lib_free_fn      free_fn;
+    mdit_lib_oom_fn       oom;
 } mdit_lib_ctx;
 
 /* libc malloc/free + stderr/abort OOM; user = NULL. */
@@ -76,11 +79,13 @@ struct mdit_token;                        /* defined in mdit/token.h */
 
 /* --- Lifecycle ----------------------------------------------------------- */
 /*
- * Create a new parser context. `preset` selects the rule set; pass NULL or
- * "default" for the kitchen-sink config, "commonmark" for strict CommonMark,
- * or "zero" for the empty preset (only `text` + `paragraph` enabled).
+ * Create a new parser context. `lib` selects allocation hooks; pass NULL
+ * for libc malloc/realloc/free with abort-on-OOM. `preset` selects the
+ * rule set: NULL or "default" for the kitchen-sink config, "commonmark"
+ * for strict CommonMark, or "zero" for the empty preset (only `text` +
+ * `paragraph` enabled).
  */
-MDIT_API mdit_ctx *mdit_new(const char *preset);
+MDIT_API mdit_ctx *mdit_new(const mdit_lib_ctx *lib, const char *preset);
 MDIT_API void      mdit_free(mdit_ctx *md);
 
 /* --- Configuration ------------------------------------------------------- */
@@ -111,12 +116,16 @@ MDIT_API size_t mdit_tokens_len(const mdit_tokens *toks);
 MDIT_API const struct mdit_token *mdit_tokens_at(const mdit_tokens *toks, size_t i);
 
 /*
- * Render `src` to HTML. On success, *out is a malloc()-allocated, NUL-
- * terminated buffer that the caller must free() (separate from the
- * arena because rendered output typically outlives the parse).
+ * Render `src` to HTML. On success, *out is a NUL-terminated buffer
+ * allocated with `md`'s library hooks; release it with mdit_free_string.
+ * The buffer is separate from the parse arena because rendered output
+ * typically outlives the parse.
  */
 MDIT_API mdit_status mdit_render(mdit_ctx *md, const char *src, size_t n,
                                  char **out, size_t *out_len);
+
+/* Release a buffer returned by mdit_render using `md`'s free hook. */
+MDIT_API void mdit_free_string(mdit_ctx *md, char *p);
 
 #ifdef __cplusplus
 }

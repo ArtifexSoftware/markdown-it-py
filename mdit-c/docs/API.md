@@ -35,7 +35,7 @@ when `MDIT_INSTALL=ON`.
 ```c
 #include <mdit/mdit.h>
 
-mdit_ctx *md = mdit_new("commonmark");
+mdit_ctx *md = mdit_new(NULL, "commonmark");
 if (md == NULL) {
     /* allocation or preset failure */
 }
@@ -46,15 +46,15 @@ if (mdit_render(md, "# hi\n", SIZE_MAX, &html, &html_len) != MDIT_OK) {
   /* parse/render failure */
 }
 fwrite(html, 1, html_len, stdout);
-free(html);
+mdit_free_string(md, html);
 
 mdit_free(md);
 ```
 
 `mdit_new` owns the parser arena and engine state. Each `mdit_render`
 or `mdit_parse` call replaces the previous token stream held on the
-context. Rendered HTML is returned in a separate `malloc()` buffer
-that the caller frees.
+context. Rendered HTML is returned in a separate buffer allocated with
+the context's library hooks; release it with `mdit_free_string`.
 
 For lower-level control (custom arenas, direct access to rulers, or
 plugin hooks that install rules), include the internal headers listed

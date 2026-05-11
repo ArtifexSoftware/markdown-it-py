@@ -17,7 +17,7 @@
 
 int main(void)
 {
-    mdit_ctx *md = mdit_new("commonmark");
+    mdit_ctx *md = mdit_new(NULL, "commonmark");
     if (md == NULL) {
         fprintf(stderr, "mdit_new failed\n");
         return 2;
@@ -41,7 +41,7 @@ int main(void)
                 (int)html_len, html);
     }
 
-    free(html);
+    mdit_free_string(md, html);
     mdit_free(md);
 
     fputs(ok ? "install_smoke: OK\n" : "install_smoke: FAIL\n",

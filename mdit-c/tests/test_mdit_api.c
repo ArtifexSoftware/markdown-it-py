@@ -18,7 +18,7 @@ MDIT_TEST(mdit_api_version_string)
 
 MDIT_TEST(mdit_api_new_commonmark_render)
 {
-    mdit_ctx *ctx = mdit_new("commonmark");
+    mdit_ctx *ctx = mdit_new(NULL, "commonmark");
     MDIT_ASSERT_NE(ctx, NULL);
 
     char *html = NULL;
@@ -28,13 +28,13 @@ MDIT_TEST(mdit_api_new_commonmark_render)
     MDIT_ASSERT_EQ_SZ(html_len, strlen(html));
     MDIT_ASSERT_STR_EQ(html, "<h1>hi</h1>\n");
 
-    free(html);
+    mdit_free_string(ctx, html);
     mdit_free(ctx);
 }
 
 MDIT_TEST(mdit_api_parse_paragraph_tokens)
 {
-    mdit_ctx *ctx = mdit_new("commonmark");
+    mdit_ctx *ctx = mdit_new(NULL, "commonmark");
     MDIT_ASSERT_NE(ctx, NULL);
 
     const mdit_tokens *toks = NULL;
@@ -48,12 +48,12 @@ MDIT_TEST(mdit_api_parse_paragraph_tokens)
 
 MDIT_TEST(mdit_api_unknown_preset_rejected)
 {
-    MDIT_ASSERT_EQ_PTR(mdit_new("not-a-preset"), NULL);
+    MDIT_ASSERT_EQ_PTR(mdit_new(NULL, "not-a-preset"), NULL);
 }
 
 MDIT_TEST(mdit_api_disable_unknown_rule)
 {
-    mdit_ctx *ctx = mdit_new("commonmark");
+    mdit_ctx *ctx = mdit_new(NULL, "commonmark");
     MDIT_ASSERT_NE(ctx, NULL);
 
     const char *names[] = { "not-a-rule" };
