@@ -474,7 +474,7 @@ bool mdit_url_parse(mdit_lib_ctx *lib,
                             size_t not_host_len = hp_len - not_host_off;
 
                             /* concat ".".join(not_host) (if any) + rest_after_host */
-                            mdit_buf nb; mdit_buf_init(&nb);
+                            mdit_buf nb; mdit_buf_init(&nb, lib);
                             if (not_host_len > 0) {
                                 /* not_host[0] is the bit_tail (no leading dot);
                                  * subsequent parts are joined with '.' which

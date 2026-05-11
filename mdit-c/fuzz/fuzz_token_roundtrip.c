@@ -44,7 +44,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
         return 0;
     }
     mdit_buf json;
-    mdit_buf_init(&json);
+    mdit_buf_init_default(&json);
     (void)mdit_tokens_to_json(tokens.data, tokens.len, &json);
     mdit_buf_destroy(&json);
     mdit_vec_token_destroy(&tokens);

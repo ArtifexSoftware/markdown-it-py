@@ -32,7 +32,7 @@
 static void assert_render(mdit_md *md, mdit_str src, const char *expected)
 {
     mdit_buf out;
-    mdit_buf_init(&out);
+    mdit_buf_init_default(&out);
     bool ok = mdit_md_render(md, src, NULL, &out);
     if (!ok) {
         mdit_buf_destroy(&out);

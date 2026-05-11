@@ -12,8 +12,9 @@
 
 #include <inttypes.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
+
+#include "lib_alloc.h"
 
 /* Modern MSVC (>=2015) ships a conformant snprintf; we don't need
  * _snprintf_s with its different signature. */
@@ -21,8 +22,9 @@
 /* ---------------------------------------------------------------------
  * Buffer
  * ------------------------------------------------------------------- */
-void mdit_buf_init(mdit_buf *b)
+void mdit_buf_init(mdit_buf *b, mdit_lib_ctx *lib)
 {
+    b->lib  = lib;
     b->data = NULL;
     b->len  = 0;
     b->cap  = 0;
@@ -31,7 +33,7 @@ void mdit_buf_init(mdit_buf *b)
 void mdit_buf_destroy(mdit_buf *b)
 {
     if (b == NULL) return;
-    free(b->data);
+    mdit_lib_free_bytes(b->lib, b->data);
     b->data = NULL;
     b->len  = 0;
     b->cap  = 0;
@@ -46,7 +48,7 @@ bool mdit_buf_reserve(mdit_buf *b, size_t want)
         if (cap > (size_t)-1 / 2) return false;
         cap *= 2;
     }
-    char *fresh = (char *)realloc(b->data, cap);
+    char *fresh = (char *)mdit_lib_realloc_bytes(b->lib, b->data, cap);
     if (fresh == NULL) return false;
     b->data = fresh;
     b->cap  = cap;

@@ -18,7 +18,7 @@ static bool unescape_to_arena(mdit_lib_ctx *lib, mdit_arena *arena,
                               mdit_str input, mdit_str *out)
 {
     mdit_buf b;
-    mdit_buf_init(&b);
+    mdit_buf_init(&b, lib);
     bool ok = mdit_unescape_all(input, &b);
     if (ok) *out = arena_copy(lib, arena, b.data ? b.data : "", b.len);
     mdit_buf_destroy(&b);
@@ -119,7 +119,7 @@ bool mdit_parse_link_title(mdit_lib_ctx *lib, mdit_arena *arena,
         unsigned char code = (unsigned char)input.data[pos];
         if (code == marker) {
             mdit_buf b;
-            mdit_buf_init(&b);
+            mdit_buf_init(&b, lib);
             bool ok = true;
             if (prefix.len > 0) {
                 ok = mdit_buf_append(&b, prefix.data, prefix.len);
@@ -141,7 +141,7 @@ bool mdit_parse_link_title(mdit_lib_ctx *lib, mdit_arena *arena,
     }
 
     mdit_buf b;
-    mdit_buf_init(&b);
+    mdit_buf_init(&b, lib);
     bool ok = true;
     if (prefix.len > 0) ok = mdit_buf_append(&b, prefix.data, prefix.len);
     if (ok) {

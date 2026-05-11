@@ -23,7 +23,7 @@
 static void check_encode(const uint32_t *cps, size_t n,
                          const char *want, size_t want_len)
 {
-    mdit_buf b; mdit_buf_init(&b);
+    mdit_buf b; mdit_buf_init_default(&b);
     if (!mdit_punycode_encode_cps(cps, n, &b)) {
         mdit_buf_destroy(&b);
         mdit_test_fail(__FILE__, __LINE__, "punycode_encode: returned false");
@@ -46,7 +46,7 @@ static void check_decode_ok(const char *in, size_t in_len,
                             const char *want_utf8, size_t want_len)
 {
     mdit_str input = { in, in_len };
-    mdit_buf b; mdit_buf_init(&b);
+    mdit_buf b; mdit_buf_init_default(&b);
     if (!mdit_punycode_decode_to_utf8(input, &b)) {
         mdit_buf_destroy(&b);
         mdit_test_fail(__FILE__, __LINE__, "punycode_decode: returned false");
@@ -69,7 +69,7 @@ static void check_decode_ok(const char *in, size_t in_len,
 static void check_decode_fail(const char *in, size_t in_len)
 {
     mdit_str input = { in, in_len };
-    mdit_buf b; mdit_buf_init(&b);
+    mdit_buf b; mdit_buf_init_default(&b);
     if (mdit_punycode_decode_to_utf8(input, &b)) {
         char msg[128];
         (void)snprintf(msg, sizeof msg,

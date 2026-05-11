@@ -636,7 +636,7 @@ static void run_source(const char *source)
         }
 
         mdit_buf out;
-        mdit_buf_init(&out);
+        mdit_buf_init_default(&out);
         if (!mdit_tokens_to_json(tokens.data, tokens.len, &out)) {
             ++g_total_failures;
             mdit_buf_destroy(&out);

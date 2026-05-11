@@ -16,10 +16,10 @@
  */
 #include "punycode.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 #include "json.h"
+#include "lib_alloc.h"
 
 /* ---------------------------------------------------------------------
  * RFC 3492 Bootstring constants and helpers.
@@ -165,7 +165,8 @@ bool mdit_punycode_decode_to_utf8(mdit_str input, mdit_buf *out)
     do {                                                                        \
         if (cps_len + 1 > cps_cap) {                                            \
             size_t new_cap = cps_cap == 0 ? 16 : cps_cap * 2;                   \
-            uint32_t *grown = (uint32_t *)realloc(cps, new_cap * sizeof *cps);  \
+            uint32_t *grown = (uint32_t *)mdit_lib_realloc_bytes(                \
+                out->lib, cps, new_cap * sizeof *cps);                          \
             if (grown == NULL) { ok = false; goto done; }                       \
             cps = grown;                                                        \
             cps_cap = new_cap;                                                  \
@@ -235,7 +236,7 @@ bool mdit_punycode_decode_to_utf8(mdit_str input, mdit_buf *out)
     }
 
 done:
-    free(cps);
+    mdit_lib_free_bytes(out->lib, cps);
     return ok;
 #undef PUSH_CP
 }
@@ -340,7 +341,8 @@ static bool ascii_label_apply(mdit_str label, mdit_buf *out)
         if (step == 0) { ok = false; break; }
         if (cps_len + 1 > cps_cap) {
             size_t new_cap = cps_cap == 0 ? 16 : cps_cap * 2;
-            uint32_t *grown = (uint32_t *)realloc(cps, new_cap * sizeof *cps);
+            uint32_t *grown = (uint32_t *)mdit_lib_realloc_bytes(
+                out->lib, cps, new_cap * sizeof *cps);
             if (grown == NULL) { ok = false; break; }
             cps = grown;
             cps_cap = new_cap;
@@ -355,7 +357,7 @@ static bool ascii_label_apply(mdit_str label, mdit_buf *out)
     bool need_fallback = !ok;
     if (!need_fallback) {
         mdit_buf encoded;
-        mdit_buf_init(&encoded);
+        mdit_buf_init(&encoded, out->lib);
         if (!mdit_punycode_encode_cps(cps, cps_len, &encoded)) {
             need_fallback = true;
         } else {
@@ -366,7 +368,7 @@ static bool ascii_label_apply(mdit_str label, mdit_buf *out)
         }
         mdit_buf_destroy(&encoded);
     }
-    free(cps);
+    mdit_lib_free_bytes(out->lib, cps);
     if (need_fallback) {
         return mdit_buf_append(out, label.data, label.len);
     }
@@ -385,7 +387,7 @@ static bool unicode_label_apply(mdit_str label, mdit_buf *out)
     mdit_str trailing = { label.data + 4, label.len - 4 };
     char *tmp = NULL;
     if (trailing.len > 0) {
-        tmp = (char *)malloc(trailing.len);
+        tmp = (char *)mdit_lib_alloc_bytes(out->lib, trailing.len);
         if (tmp == NULL) return false;
         for (size_t i = 0; i < trailing.len; ++i) {
             unsigned char c = (unsigned char)trailing.data[i];
@@ -396,13 +398,13 @@ static bool unicode_label_apply(mdit_str label, mdit_buf *out)
     }
 
     mdit_buf decoded;
-    mdit_buf_init(&decoded);
+    mdit_buf_init(&decoded, out->lib);
     bool ok = mdit_punycode_decode_to_utf8(trailing, &decoded);
     if (ok) {
         ok = mdit_buf_append(out, decoded.data ? decoded.data : "", decoded.len);
     }
     mdit_buf_destroy(&decoded);
-    free(tmp);
+    mdit_lib_free_bytes(out->lib, tmp);
     if (!ok) {
         /* On failure, emit the label verbatim (suppress-equivalent). */
         return mdit_buf_append(out, label.data, label.len);
@@ -425,7 +427,7 @@ bool mdit_idn_to_ascii(mdit_lib_ctx *lib, mdit_arena *arena,
                        mdit_str hostname, mdit_str *out)
 {
     mdit_buf buf;
-    mdit_buf_init(&buf);
+    mdit_buf_init(&buf, lib);
     bool ok = map_domain(hostname, ascii_label_apply, &buf);
     if (ok) *out = arena_copy_buf(lib, arena, buf);
     mdit_buf_destroy(&buf);
@@ -436,7 +438,7 @@ bool mdit_idn_to_unicode(mdit_lib_ctx *lib, mdit_arena *arena,
                          mdit_str hostname, mdit_str *out)
 {
     mdit_buf buf;
-    mdit_buf_init(&buf);
+    mdit_buf_init(&buf, lib);
     bool ok = map_domain(hostname, unicode_label_apply, &buf);
     if (ok) *out = arena_copy_buf(lib, arena, buf);
     mdit_buf_destroy(&buf);

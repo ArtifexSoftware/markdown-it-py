@@ -3,9 +3,9 @@
  */
 #include "state.h"
 
-#include <stdlib.h>
 #include <string.h>
 
+#include "lib_alloc.h"
 #include "main.h"
 #include "vec.h"
 
@@ -253,7 +253,7 @@ void mdit_state_inline_init(mdit_state_inline *s,
     s->arena   = arena;
     s->pos     = 0;
     s->pos_max = src.len;
-    mdit_buf_init(&s->pending);
+    mdit_buf_init(&s->pending, md->lib);
 
     s->delimiters = (mdit_vec_delimiter *)
         mdit_arena_alloc(md->lib, arena, sizeof *s->delimiters);
@@ -275,9 +275,10 @@ void mdit_state_inline_destroy(mdit_state_inline *s)
     mdit_buf_destroy(&s->pending);
     /* `delimiters` and any pool entries live in the arena -- nothing
      * to free here other than the malloc-backed scaffolding. */
-    free(s->delim_stack);
-    free(s->tokens_meta);
-    free(s->cache);
+    mdit_lib_ctx *lib = (s->md != NULL) ? s->md->lib : NULL;
+    mdit_lib_free_bytes(lib, s->delim_stack);
+    mdit_lib_free_bytes(lib, s->tokens_meta);
+    mdit_lib_free_bytes(lib, s->cache);
     s->delim_stack    = NULL;
     s->tokens_meta    = NULL;
     s->cache          = NULL;
@@ -290,9 +291,8 @@ static bool stk_push_delim(mdit_state_inline *s, mdit_vec_delimiter *p)
 {
     if (s->delim_stack_len == s->delim_stack_cap) {
         size_t new_cap = (s->delim_stack_cap == 0) ? 4 : s->delim_stack_cap * 2;
-        mdit_vec_delimiter **tmp =
-            (mdit_vec_delimiter **)realloc(s->delim_stack,
-                                           new_cap * sizeof *tmp);
+        mdit_vec_delimiter **tmp = (mdit_vec_delimiter **)mdit_lib_realloc_bytes(
+            s->md->lib, s->delim_stack, new_cap * sizeof *tmp);
         if (tmp == NULL) return false;
         s->delim_stack = tmp;
         s->delim_stack_cap = new_cap;
@@ -311,9 +311,8 @@ static bool tm_push(mdit_state_inline *s, mdit_vec_delimiter *p)
 {
     if (s->tokens_meta_len == s->tokens_meta_cap) {
         size_t new_cap = (s->tokens_meta_cap == 0) ? 16 : s->tokens_meta_cap * 2;
-        mdit_vec_delimiter **tmp =
-            (mdit_vec_delimiter **)realloc(s->tokens_meta,
-                                           new_cap * sizeof *tmp);
+        mdit_vec_delimiter **tmp = (mdit_vec_delimiter **)mdit_lib_realloc_bytes(
+            s->md->lib, s->tokens_meta, new_cap * sizeof *tmp);
         if (tmp == NULL) return false;
         s->tokens_meta = tmp;
         s->tokens_meta_cap = new_cap;

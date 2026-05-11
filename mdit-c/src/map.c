@@ -8,8 +8,9 @@
  */
 #include "map.h"
 
-#include <stdlib.h>
 #include <string.h>
+
+#include "lib_alloc.h"
 
 /* ---------------------------------------------------------------------
  * Internal growth — mirrors the policy in vec.c but with the map's
@@ -38,7 +39,9 @@ static bool ensure_cap(mdit_map *m, size_t want_cap)
         return true;
     }
 
-    mdit_map_entry *fresh = (mdit_map_entry *)realloc(m->data, bytes);
+    if (m->lib == NULL) return false;
+    mdit_map_entry *fresh =
+        (mdit_map_entry *)mdit_lib_realloc_bytes(m->lib, m->data, bytes);
     if (fresh == NULL) return false;
     m->data = fresh;
     m->cap  = cap;
@@ -69,7 +72,7 @@ void mdit_map_destroy(mdit_map *m)
 {
     if (m == NULL) return;
     if (m->arena == NULL && m->data != NULL) {
-        free(m->data);
+        mdit_lib_free_bytes(m->lib, m->data);
     }
     m->data = NULL;
     m->len  = 0;

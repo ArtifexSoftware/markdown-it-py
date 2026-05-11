@@ -36,7 +36,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 
     mdit_str src = { (const char *)data, size };
     mdit_buf out;
-    mdit_buf_init(&out);
+    mdit_buf_init_default(&out);
     (void)mdit_md_render_inline(&g_md, src, NULL, &out);
     mdit_buf_destroy(&out);
     return 0;

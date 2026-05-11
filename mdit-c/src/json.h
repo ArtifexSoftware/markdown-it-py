@@ -6,10 +6,10 @@
  * ensure_ascii=False)`` would, for the value subset that ``Token``
  * uses (null / bool / int / double / string / object / array).
  *
- * The grow-only buffer (``mdit_buf``) is borrowed/malloc-backed; the
- * caller frees it via ``mdit_buf_destroy``. We don't route this
- * through the arena because the rendered JSON typically outlives the
- * parser state (it's consumed by tests / FFI).
+ * The grow-only buffer (``mdit_buf``) is host-backed via ``mdit_lib_ctx``
+ * hooks; the caller frees it via ``mdit_buf_destroy``. We don't route
+ * this through the arena because the rendered JSON typically outlives
+ * the parser state (it's consumed by tests / FFI).
  */
 #ifndef MDIT_SRC_JSON_H
 #define MDIT_SRC_JSON_H
@@ -19,18 +19,27 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "mdit/mdit.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 typedef struct mdit_buf {
-    char  *data;
-    size_t len;
-    size_t cap;
+    mdit_lib_ctx *lib;
+    char         *data;
+    size_t        len;
+    size_t        cap;
 } mdit_buf;
 
-void   mdit_buf_init   (mdit_buf *b);
+void   mdit_buf_init   (mdit_buf *b, mdit_lib_ctx *lib);
 void   mdit_buf_destroy(mdit_buf *b);
+
+/* Convenience for harnesses that do not own a custom allocator. */
+static inline void mdit_buf_init_default(mdit_buf *b)
+{
+    mdit_buf_init(b, (mdit_lib_ctx *)(void *)mdit_lib_ctx_builtin_default());
+}
 bool   mdit_buf_reserve(mdit_buf *b, size_t want);
 bool   mdit_buf_append (mdit_buf *b, const char *s, size_t n);
 bool   mdit_buf_append_byte(mdit_buf *b, char c);

@@ -1632,7 +1632,7 @@ static PyObject *do_render(PyMarkdownIt *self, PyObject *args,
      * user-supplied Python ``env`` so callers can read them out, the
      * same way upstream populates ``env["references"]``. */
     mdit_buf out;
-    mdit_buf_init(&out);
+    mdit_buf_init(&out, &self->lib);
     mdit_str src = { s, (size_t)n };
     mdit_env c_env;
     mdit_env_init(&c_env, self->md.lib, self->md.arena);

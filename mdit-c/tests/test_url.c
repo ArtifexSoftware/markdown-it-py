@@ -111,7 +111,7 @@ MDIT_TEST(url_format_matches_python_for_sample)
         input.data = c->input; input.len = c->input_len;
         (void)mdit_url_parse(&lib, &a, input, false, &u);
 
-        mdit_buf b; mdit_buf_init(&b);
+        mdit_buf b; mdit_buf_init_default(&b);
         if (!mdit_url_format(&u, &b)) {
             mdit_buf_destroy(&b);
             mdit_arena_destroy(&lib, &a);
@@ -141,7 +141,7 @@ static void run_encode_cases(const mdit_url_encode_case *cases,
 {
     for (size_t i = 0; i < n; ++i) {
         const mdit_url_encode_case *c = &cases[i];
-        mdit_buf b; mdit_buf_init(&b);
+        mdit_buf b; mdit_buf_init_default(&b);
         mdit_str input;
         input.data = c->input; input.len = c->input_len;
         if (!mdit_url_encode(input, exclude, true, &b)) {
@@ -186,7 +186,7 @@ static void run_decode_cases(const mdit_url_encode_case *cases,
 {
     for (size_t i = 0; i < n; ++i) {
         const mdit_url_encode_case *c = &cases[i];
-        mdit_buf b; mdit_buf_init(&b);
+        mdit_buf b; mdit_buf_init_default(&b);
         mdit_str input;
         input.data = c->input; input.len = c->input_len;
         if (!mdit_url_decode(input, exclude, &b)) {
@@ -247,7 +247,7 @@ MDIT_TEST(url_format_roundtrip_basic)
     MDIT_ASSERT_TRUE(u.has_hash);
     MDIT_ASSERT_TRUE(mdit_str_eq_z(u.hash, "#h"));
 
-    mdit_buf b; mdit_buf_init(&b);
+    mdit_buf b; mdit_buf_init_default(&b);
     MDIT_ASSERT_TRUE(mdit_url_format(&u, &b));
     MDIT_ASSERT_STR_EQ(mdit_buf_str(&b), "https://e.org/p?q#h");
     mdit_buf_destroy(&b);
@@ -257,14 +257,14 @@ MDIT_TEST(url_format_roundtrip_basic)
 
 MDIT_TEST(url_encode_skips_already_escaped_when_keep_escaped)
 {
-    mdit_buf b; mdit_buf_init(&b);
+    mdit_buf b; mdit_buf_init_default(&b);
     MDIT_ASSERT_TRUE(mdit_url_encode(MDIT_STR_LIT("a%20b"),
         MDIT_URL_ENCODE_DEFAULT_CHARS, true, &b));
     MDIT_ASSERT_STR_EQ(mdit_buf_str(&b), "a%20b");
     mdit_buf_destroy(&b);
 
     /* keep_escaped=false should re-encode the % sign as %25. */
-    mdit_buf c; mdit_buf_init(&c);
+    mdit_buf c; mdit_buf_init_default(&c);
     MDIT_ASSERT_TRUE(mdit_url_encode(MDIT_STR_LIT("a%20b"),
         MDIT_URL_ENCODE_DEFAULT_CHARS, false, &c));
     MDIT_ASSERT_STR_EQ(mdit_buf_str(&c), "a%2520b");

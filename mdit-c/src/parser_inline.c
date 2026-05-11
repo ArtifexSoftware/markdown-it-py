@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "env.h"
+#include "lib_alloc.h"
 #include "link_helpers.h"
 #include "linkifier.h"
 #include "main.h"
@@ -1733,7 +1734,8 @@ void mdit_parser_inline_skip_token(mdit_parser_inline *p,
     /* Lazily allocate cache: src.len + 1 entries, all -1. */
     if (state->cache == NULL && state->src.len > 0) {
         size_t n = state->src.len + 1;
-        int32_t *buf = (int32_t *)malloc(n * sizeof *buf);
+        int32_t *buf = (int32_t *)mdit_lib_alloc_bytes(state->md->lib,
+                                                      n * sizeof *buf);
         if (buf != NULL) {
             for (size_t i = 0; i < n; ++i) buf[i] = -1;
             state->cache     = buf;

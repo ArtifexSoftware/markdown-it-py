@@ -334,7 +334,7 @@ static bool rule_fence(mdit_renderer *r,
 
     /* Extract first whitespace-delimited token of info as the lang name
      * (post-unescape). */
-    mdit_buf info_unescaped; mdit_buf_init(&info_unescaped);
+    mdit_buf info_unescaped; mdit_buf_init(&info_unescaped, r->lib);
     if (!mdit_unescape_all(t->info, &info_unescaped)) {
         mdit_buf_destroy(&info_unescaped);
         return false;
@@ -401,7 +401,7 @@ static bool rule_image(mdit_renderer *r,
         if (!mdit_escape_html(e->key, out)) return false;
         if (!mdit_buf_append(out, "=\"", 2)) return false;
         if (mdit_str_eq_z(e->key, "alt")) {
-            mdit_buf alt; mdit_buf_init(&alt);
+            mdit_buf alt; mdit_buf_init(&alt, r->lib);
             if (t->children != NULL && t->children_len > 0) {
                 if (!mdit_renderer_render_inline_as_text(r,
                         t->children, t->children_len, opts, env, &alt)) {

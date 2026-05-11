@@ -425,7 +425,7 @@ mdit_status mdit_render(mdit_ctx *ctx, const char *src, size_t n,
     }
 
     mdit_buf rendered;
-    mdit_buf_init(&rendered);
+    mdit_buf_init(&rendered, &ctx->lib);
     mdit_str input = mdit_str_make(src, mdit_src_len(src, n));
     if (!mdit_md_render(&ctx->engine, input, NULL, &rendered)) {
         mdit_buf_destroy(&rendered);

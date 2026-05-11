@@ -210,7 +210,7 @@ static bool block_code(mdit_state_block *state)
     if (t == NULL) return false;
 
     mdit_buf raw;
-    mdit_buf_init(&raw);
+    mdit_buf_init(&raw, state->md->lib);
     (void)mdit_state_block_get_lines(state, startLine, last,
                                      4 + state->blkIndent, false, &raw);
     /* Append trailing '\n' to match upstream. */
@@ -289,7 +289,7 @@ static bool block_fence(mdit_state_block *state)
         t->info = arena_copy_str(state->md->lib, state->arena, params.data, params.len);
     }
     mdit_buf raw;
-    mdit_buf_init(&raw);
+    mdit_buf_init(&raw, state->md->lib);
     (void)mdit_state_block_get_lines(state, startLine + 1, nextLine,
                                      outer_indent, true, &raw);
     t->content = arena_copy_str(state->md->lib, state->arena, raw.data, raw.len);
@@ -470,7 +470,7 @@ static bool block_lheading(mdit_state_block *state)
     }
 
     mdit_buf raw;
-    mdit_buf_init(&raw);
+    mdit_buf_init(&raw, state->md->lib);
     (void)mdit_state_block_get_lines(state, startLine, nextLine,
                                      state->blkIndent, false, &raw);
     mdit_str body = str_strip((mdit_str){ raw.data ? raw.data : "", raw.len });
@@ -1155,7 +1155,7 @@ static bool block_reference(mdit_state_block *state)
     if (pos >= maximum_line || state->src.data[pos] != '[') return false;
 
     mdit_buf string;
-    mdit_buf_init(&string);
+    mdit_buf_init(&string, state->md->lib);
     int32_t first_end = maximum_line + 1;
     if (first_end > (int32_t)state->src.len) first_end = (int32_t)state->src.len;
     if (!mdit_buf_append(&string, state->src.data + pos,
@@ -1546,7 +1546,7 @@ static bool block_html_block(mdit_state_block *state)
     mdit_token_set_map(t, startLine, nextLine);
 
     mdit_buf raw;
-    mdit_buf_init(&raw);
+    mdit_buf_init(&raw, state->md->lib);
     (void)mdit_state_block_get_lines(state, startLine, nextLine,
                                      state->blkIndent, true, &raw);
     t->content = arena_copy_str(state->md->lib, state->arena, raw.data ? raw.data : "", raw.len);
@@ -1640,7 +1640,7 @@ static bool table_escaped_split(mdit_lib_ctx *lib, mdit_arena *arena,
     /* Worst case: one cell per byte. We accumulate into a scratch buf
      * then snapshot into the arena per cell. */
     mdit_buf cur;
-    mdit_buf_init(&cur);
+    mdit_buf_init(&cur, lib);
     size_t pos = 0;
     size_t last_pos = 0;
     bool   is_escaped = false;
@@ -2009,7 +2009,7 @@ static bool block_paragraph(mdit_state_block *state)
 
     /* Pull lines [startLine, nextLine) out of the source. */
     mdit_buf raw;
-    mdit_buf_init(&raw);
+    mdit_buf_init(&raw, state->md->lib);
     (void)mdit_state_block_get_lines(state, startLine, nextLine,
                                      state->blkIndent, false, &raw);
 

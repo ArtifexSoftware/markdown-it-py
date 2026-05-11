@@ -6,8 +6,9 @@
  */
 #include "vec.h"
 
-#include <stdlib.h>
 #include <string.h>
+
+#include "lib_alloc.h"
 
 void *mdit_vec_core_reserve(mdit_vec_core *v, size_t want_cap)
 {
@@ -46,8 +47,9 @@ void *mdit_vec_core_reserve(mdit_vec_core *v, size_t want_cap)
         return v->data;
     }
 
-    /* malloc-backed. */
-    void *fresh = realloc(v->data, bytes);
+    /* Host-backed. */
+    if (v->lib == NULL) return NULL;
+    void *fresh = mdit_lib_realloc_bytes(v->lib, v->data, bytes);
     if (fresh == NULL) return NULL;
     v->data = fresh;
     v->cap  = want_cap;
@@ -83,7 +85,7 @@ void mdit_vec_core_clear(mdit_vec_core *v)
 void mdit_vec_core_destroy(mdit_vec_core *v)
 {
     if (v->arena == NULL && v->data != NULL) {
-        free(v->data);
+        mdit_lib_free_bytes(v->lib, v->data);
     }
     v->data = NULL;
     v->len  = 0;

@@ -62,8 +62,10 @@ MDIT_TEST(vec_arena_extends_in_place_when_possible)
 
 MDIT_TEST(vec_malloc_push_grows)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_vec_intv v;
-    mdit_vec_intv_init(&v, NULL, NULL);
+    mdit_vec_intv_init(&v, &lib, NULL);
     for (int i = 0; i < 500; ++i) {
         (void)mdit_vec_intv_push(&v, i);
     }
@@ -77,8 +79,10 @@ MDIT_TEST(vec_malloc_push_grows)
 
 MDIT_TEST(vec_pop_clear_emplace)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_vec_kvv v;
-    mdit_vec_kvv_init(&v, NULL, NULL);
+    mdit_vec_kvv_init(&v, &lib, NULL);
     for (int i = 0; i < 5; ++i) {
         kv *slot = mdit_vec_kvv_emplace(&v);
         MDIT_ASSERT_NE(slot, NULL);
@@ -101,8 +105,10 @@ MDIT_TEST(vec_pop_clear_emplace)
 
 MDIT_TEST(vec_reserve_does_not_truncate)
 {
+    mdit_lib_ctx lib;
+    mdit_lib_ctx_init_defaults(&lib);
     mdit_vec_intv v;
-    mdit_vec_intv_init(&v, NULL, NULL);
+    mdit_vec_intv_init(&v, &lib, NULL);
     (void)mdit_vec_intv_push(&v, 1);
     (void)mdit_vec_intv_push(&v, 2);
     (void)mdit_vec_intv_push(&v, 3);

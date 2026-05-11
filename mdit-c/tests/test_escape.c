@@ -19,7 +19,7 @@
 
 static void check_escape(const char *in, const char *want)
 {
-    mdit_buf b; mdit_buf_init(&b);
+    mdit_buf b; mdit_buf_init_default(&b);
     MDIT_ASSERT_TRUE(mdit_escape_html(
         (mdit_str){ in, strlen(in) }, &b));
     MDIT_ASSERT_STR_EQ(mdit_buf_str(&b), want);
@@ -28,7 +28,7 @@ static void check_escape(const char *in, const char *want)
 
 static void check_unescape(const char *in, const char *want)
 {
-    mdit_buf b; mdit_buf_init(&b);
+    mdit_buf b; mdit_buf_init_default(&b);
     MDIT_ASSERT_TRUE(mdit_unescape_all(
         (mdit_str){ in, strlen(in) }, &b));
     MDIT_ASSERT_STR_EQ(mdit_buf_str(&b), want);
@@ -124,7 +124,7 @@ MDIT_TEST(is_valid_entity_code_boundaries)
 
 MDIT_TEST(emit_utf8_round_trip)
 {
-    mdit_buf b; mdit_buf_init(&b);
+    mdit_buf b; mdit_buf_init_default(&b);
     MDIT_ASSERT_TRUE(mdit_emit_utf8('A', &b));
     MDIT_ASSERT_TRUE(mdit_emit_utf8(0x00E9, &b));   /* é */
     MDIT_ASSERT_TRUE(mdit_emit_utf8(0x20AC, &b));   /* € */

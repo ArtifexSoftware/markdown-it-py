@@ -78,10 +78,10 @@ bool mdit_normalize_link(mdit_lib_ctx *lib, mdit_arena *arena,
     }
 
     mdit_buf formatted;
-    mdit_buf_init(&formatted);
+    mdit_buf_init(&formatted, lib);
     bool ok = mdit_url_format(&parsed, &formatted);
     mdit_buf encoded;
-    mdit_buf_init(&encoded);
+    mdit_buf_init(&encoded, lib);
     if (ok) {
         ok = mdit_url_encode(
             (mdit_str){ formatted.data ? formatted.data : "", formatted.len },
@@ -112,10 +112,10 @@ bool mdit_normalize_link_text(mdit_lib_ctx *lib, mdit_arena *arena,
     }
 
     mdit_buf formatted;
-    mdit_buf_init(&formatted);
+    mdit_buf_init(&formatted, lib);
     bool ok = mdit_url_format(&parsed, &formatted);
     mdit_buf decoded;
-    mdit_buf_init(&decoded);
+    mdit_buf_init(&decoded, lib);
     if (ok) {
         ok = mdit_url_decode(
             (mdit_str){ formatted.data ? formatted.data : "", formatted.len },

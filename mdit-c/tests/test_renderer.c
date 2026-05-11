@@ -42,7 +42,7 @@ static void check_render(const mdit_token *tokens, size_t n,
                          const mdit_renderer_options *opts,
                          const char *want)
 {
-    mdit_buf b; mdit_buf_init(&b);
+    mdit_buf b; mdit_buf_init_default(&b);
     render_seq(tokens, n, opts, &b);
     if (strcmp(mdit_buf_str(&b), want) != 0) {
         char msg[2048];
@@ -271,7 +271,7 @@ MDIT_TEST(renderer_custom_rule_replaces_default)
     mdit_token_init(&t, &lib, &a, MDIT_STR_LIT("text"), MDIT_STR_LIT(""), 0);
     mdit_token_set_content(&t, MDIT_STR_LIT("hi & bye"));
 
-    mdit_buf b; mdit_buf_init(&b);
+    mdit_buf b; mdit_buf_init_default(&b);
     mdit_renderer_options opts = MDIT_RENDERER_OPTIONS_DEFAULTS;
     MDIT_ASSERT_TRUE(mdit_renderer_render(r, &t, 1, &opts, NULL, &b));
     MDIT_ASSERT_STR_EQ(mdit_buf_str(&b), "<span>hi &amp; bye</span>");
@@ -292,7 +292,7 @@ MDIT_TEST(renderer_attrs_escape_keys_and_values)
     mdit_token_attr_set_z(&t, "href", mdit_value_cstr("/p?q=1&r=2"));
     mdit_token_attr_set_z(&t, "title", mdit_value_cstr("a \"quoted\" title"));
 
-    mdit_buf b; mdit_buf_init(&b);
+    mdit_buf b; mdit_buf_init_default(&b);
     MDIT_ASSERT_TRUE(mdit_renderer_render_attrs(&t, &b));
     MDIT_ASSERT_STR_EQ(mdit_buf_str(&b),
         " href=\"/p?q=1&amp;r=2\" title=\"a &quot;quoted&quot; title\"");

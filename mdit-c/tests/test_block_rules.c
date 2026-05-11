@@ -51,7 +51,7 @@ static void run_case(const mdit_block_oracle_case *c)
         mdit_linkifier_default_use_full_tlds(false);
     }
     mdit_buf out;
-    mdit_buf_init(&out);
+    mdit_buf_init_default(&out);
     mdit_str src = { c->input, c->input_len };
     bool ok = mdit_md_render(&md, src, NULL, &out);
     if (!ok) {

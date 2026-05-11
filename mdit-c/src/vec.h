@@ -6,8 +6,9 @@
  *     an mdit_arena. Growing copies into a fresh arena slot when the
  *     vector outgrows its current bump-allocated buffer (mdit_arena
  *     supports try-extend so most growths are in-place).
- *   - malloc-backed: growth uses realloc(). Used at the API boundary
- *     where the caller wants ownership independent of any arena.
+ *   - Host-backed: growth uses ``mdit_lib_ctx`` hooks. Used at the
+ *     API boundary where the caller wants ownership independent of any
+ *     arena.
  *
  * The macros expand into thin static-inline functions so the type is
  * preserved and the optimiser can collapse the indirection. The header

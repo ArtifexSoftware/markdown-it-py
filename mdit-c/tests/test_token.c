@@ -24,7 +24,7 @@
 /* Helper: render a freshly-built token, assert it matches `want`. */
 static void check_json(mdit_token *t, const char *want, const char *label)
 {
-    mdit_buf b; mdit_buf_init(&b);
+    mdit_buf b; mdit_buf_init_default(&b);
     bool ok = mdit_token_to_json(t, &b);
     if (!ok) {
         mdit_test_fail(__FILE__, __LINE__, "mdit_token_to_json returned false");
