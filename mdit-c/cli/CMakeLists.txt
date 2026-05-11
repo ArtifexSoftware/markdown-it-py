@@ -1,11 +1,5 @@
 # mdit-c command-line tool.
 #
-# The CLI today depends on the *internal* parser/render entry points
-# (`mdit_md_*`) declared in `../src/main.h`. Once `include/mdit/mdit.h`
-# grows real implementations for `mdit_new` / `mdit_render`, the CLI
-# can move onto the public surface and we'll drop the private include
-# path below.
-
 if(NOT TARGET mdit_static)
     message(STATUS "mdit-c CLI skipped: static library target not configured")
     return()
@@ -13,11 +7,6 @@ endif()
 
 add_executable(md_cli md_cli.c)
 set_target_properties(md_cli PROPERTIES OUTPUT_NAME markdown-it-c)
-
-# Pull in the internal headers (main.h, arena.h, json.h, str.h, …).
-target_include_directories(md_cli PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../src"
-)
 
 target_link_libraries(md_cli PRIVATE
     mdit_static
@@ -40,7 +29,7 @@ endif()
 if(MDIT_BUILD_TESTS)
     add_test(NAME md_cli_version COMMAND md_cli --version)
     set_tests_properties(md_cli_version PROPERTIES
-        PASS_REGULAR_EXPRESSION "markdown-it-c [0-9]+\\.[0-9]+\\.[0-9]+")
+        PASS_REGULAR_EXPRESSION "mdit-c [0-9]+\\.[0-9]+\\.[0-9]+")
 
     add_test(NAME md_cli_help COMMAND md_cli --help)
     set_tests_properties(md_cli_help PROPERTIES

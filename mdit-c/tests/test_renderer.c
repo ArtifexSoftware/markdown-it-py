@@ -13,7 +13,7 @@
 
 #include "arena.h"
 #include "escape.h"
-#include "mdit/mdit_lib_ctx.h"
+#include "mdit/mdit.h"
 #include "json.h"
 #include "map.h"
 #include "renderer.h"

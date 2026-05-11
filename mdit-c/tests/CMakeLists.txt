@@ -19,6 +19,7 @@ set(MDIT_TEST_SUITES
     test_escape
     test_renderer
     test_main
+    test_mdit_api
     test_block_rules
     test_token_oracle
 )

@@ -1,7 +1,7 @@
 /*
  * mdit_lib_ctx — default libc-backed runtime context.
  */
-#include "mdit/mdit_lib_ctx.h"
+#include "mdit/mdit.h"
 
 #include <stdio.h>
 #include <stdlib.h>

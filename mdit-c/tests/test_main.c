@@ -23,7 +23,7 @@
 #include "arena.h"
 #include "json.h"
 #include "main.h"
-#include "mdit/mdit_lib_ctx.h"
+#include "mdit/mdit.h"
 #include "token.h"
 
 #define LIT(s)  ((mdit_str){ (s), sizeof(s) - 1 })

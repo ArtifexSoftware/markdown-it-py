@@ -11,7 +11,7 @@
 #include "mdit_test.h"
 
 #include "arena.h"
-#include "mdit/mdit_lib_ctx.h"
+#include "mdit/mdit.h"
 #include "ruler.h"
 #include "str.h"
 

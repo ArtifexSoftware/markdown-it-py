@@ -29,7 +29,28 @@ extern "C" {
 #  define MDIT_API
 #endif
 
-#include "mdit_lib_ctx.h"
+/* --- Library runtime context --------------------------------------------- */
+/*
+ * Host-provided allocation hooks. `alloc` must return NULL on failure
+ * (the library then calls `oom`, which must not return in normal use).
+ * `user` is forwarded to every hook.
+ */
+typedef void (*mdit_lib_oom_fn)(void *user, size_t requested);
+typedef void *(*mdit_lib_alloc_fn)(void *user, size_t size);
+typedef void (*mdit_lib_free_fn)(void *user, void *ptr);
+
+typedef struct mdit_lib_ctx {
+    void               *user;
+    mdit_lib_alloc_fn   alloc;
+    mdit_lib_free_fn    free_fn;
+    mdit_lib_oom_fn     oom;
+} mdit_lib_ctx;
+
+/* libc malloc/free + stderr/abort OOM; user = NULL. */
+MDIT_API void mdit_lib_ctx_init_defaults(mdit_lib_ctx *ctx);
+
+/* Shared process-wide defaults (read-only hooks). Safe to copy from. */
+MDIT_API const mdit_lib_ctx *mdit_lib_ctx_builtin_default(void);
 
 /* --- Versioning ---------------------------------------------------------- */
 #define MDIT_VERSION_MAJOR 0
@@ -51,7 +72,7 @@ typedef enum mdit_status {
 /* --- Opaque types -------------------------------------------------------- */
 typedef struct mdit_ctx     mdit_ctx;     /* a configured parser+renderer */
 typedef struct mdit_tokens  mdit_tokens;  /* a token stream owned by an arena */
-typedef struct mdit_token   mdit_token;   /* see token.h for the full struct */
+struct mdit_token;                        /* defined in mdit/token.h */
 
 /* --- Lifecycle ----------------------------------------------------------- */
 /*
@@ -87,7 +108,7 @@ MDIT_API mdit_status mdit_parse(mdit_ctx *md, const char *src, size_t n,
 /* Number of top-level tokens in a stream. Children (inline tokens) are
  * reachable via the per-token API in token.h. */
 MDIT_API size_t mdit_tokens_len(const mdit_tokens *toks);
-MDIT_API const mdit_token *mdit_tokens_at(const mdit_tokens *toks, size_t i);
+MDIT_API const struct mdit_token *mdit_tokens_at(const mdit_tokens *toks, size_t i);
 
 /*
  * Render `src` to HTML. On success, *out is a malloc()-allocated, NUL-

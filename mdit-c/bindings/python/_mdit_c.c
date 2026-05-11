@@ -56,7 +56,7 @@
 #include "env.h"
 #include "linkifier.h"
 #include "main.h"
-#include "mdit/mdit_lib_ctx.h"
+#include "mdit/mdit.h"
 #include "parser_inline.h"
 #include "ruler.h"
 #include "state.h"

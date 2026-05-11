@@ -29,7 +29,7 @@
 #include <string.h>
 
 #include "arena.h"
-#include "mdit/mdit_lib_ctx.h"
+#include "mdit/mdit.h"
 
 #ifdef __cplusplus
 extern "C" {

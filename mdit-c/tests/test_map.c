@@ -5,7 +5,7 @@
 
 #include "arena.h"
 #include "map.h"
-#include "mdit/mdit_lib_ctx.h"
+#include "mdit/mdit.h"
 #include "str.h"
 
 #include <string.h>

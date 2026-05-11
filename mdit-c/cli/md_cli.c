@@ -34,19 +34,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "arena.h"
-#include "json.h"
-#include "main.h"
-#include "mdit/mdit_lib_ctx.h"
-#include "ruler.h"
-#include "str.h"
+#include "mdit/mdit.h"
 
 #define MD_CLI_PROG_NAME "markdown-it-c"
 
-/* mdit currently has no public version macro that's stable; expose what
- * the internal headers do know. The header field is intended to evolve
- * with the public API; for now mirror it byte-for-byte. */
-#define MD_CLI_VERSION_STRING MD_CLI_PROG_NAME " 0.0.1"
+#define MD_CLI_VERSION_STRING mdit_version_string()
 
 static void print_usage(FILE *out)
 {
@@ -169,41 +161,30 @@ static int slurp_stdin(char **out_data, size_t *out_len)
  * arena; we reset the arena between calls so multi-file invocations
  * don't accumulate memory across documents.
  * ------------------------------------------------------------------- */
-static int render_one(mdit_md   *md,
-                      mdit_arena *arena,
+static int render_one(mdit_ctx    *md,
                       const char *src_data,
                       size_t      src_len,
                       const char *origin_label)
 {
-    mdit_buf out;
-    mdit_buf_init(&out);
-
-    mdit_str src = { src_data, src_len };
-    bool ok = mdit_md_render(md, src, NULL, &out);
-    if (!ok) {
+    char  *html = NULL;
+    size_t html_len = 0;
+    mdit_status st = mdit_render(md, src_data, src_len, &html, &html_len);
+    if (st != MDIT_OK) {
         fprintf(stderr, MD_CLI_PROG_NAME
                 ": render failed for %s.\n", origin_label);
-        mdit_buf_destroy(&out);
         return 2;
     }
 
-    if (out.len > 0) {
-        size_t w = fwrite(out.data, 1, out.len, stdout);
-        if (w != out.len) {
+    if (html_len > 0) {
+        size_t w = fwrite(html, 1, html_len, stdout);
+        if (w != html_len) {
             fprintf(stderr, MD_CLI_PROG_NAME
                     ": short write to stdout.\n");
-            mdit_buf_destroy(&out);
+            free(html);
             return 2;
         }
     }
-    mdit_buf_destroy(&out);
-
-    /* Reset the arena for the next file. ``mdit_md`` keeps borrowed
-     * pointers into the arena (for built-in rule names etc.) so we
-     * cannot reset between renders without re-init; callers that want
-     * a fresh arena should use one ``mdit_md`` per file. The current
-     * setup keeps the arena live for the program's lifetime. */
-    (void)arena;
+    free(html);
     return 0;
 }
 
@@ -282,32 +263,10 @@ int main(int argc, char **argv)
     int n_files = args.pos_last - args.pos_first;
     bool use_stdin = args.force_stdin || n_files == 0;
 
-    mdit_lib_ctx lib;
-    mdit_lib_ctx_init_defaults(&lib);
-    mdit_arena arena;
-    mdit_arena_init(&arena, 0);
-    mdit_md md;
-    if (!mdit_md_init(&md, &lib, &arena)) {
+    mdit_ctx *md = mdit_new("commonmark");
+    if (md == NULL) {
         fprintf(stderr, MD_CLI_PROG_NAME ": failed to initialize parser.\n");
-        mdit_arena_destroy(&lib, &arena);
         return 2;
-    }
-
-    /* Match Python's `MarkdownIt()` defaults, which load the
-     * ``commonmark`` preset: `xhtmlOut=True`, `html=True`,
-     * `maxNesting=20`, and the GFM `table` rule disabled. The C port's
-     * `mdit_md_init` defaults track the more conservative `default`
-     * preset; we patch the differences explicitly here so the CLI is
-     * byte-compatible with `python -m markdown_it.cli.parse`. */
-    md.options.max_nesting = 20;
-    md.options.html        = true;
-    md.options.xhtml_out   = true;
-    {
-        mdit_str table_name  = MDIT_STR_LIT("table");
-        mdit_str strike_name = MDIT_STR_LIT("strikethrough");
-        (void)mdit_ruler_disable(md.block.ruler,    &table_name,  1, true);
-        (void)mdit_ruler_disable(md.inline_p.ruler, &strike_name, 1, true);
-        (void)mdit_ruler_disable(md.inline_p.ruler2, &strike_name, 1, true);
     }
 
     int exit_code = 0;
@@ -319,7 +278,7 @@ int main(int argc, char **argv)
             int rc = slurp_file(argv[i], &data, &len);
             if (rc != 0) { exit_code = rc; break; }
 
-            rc = render_one(&md, &arena, data, len, argv[i]);
+            rc = render_one(md, data, len, argv[i]);
             free(data);
             if (rc != 0) { exit_code = rc; break; }
         }
@@ -332,13 +291,12 @@ int main(int argc, char **argv)
         if (rc != 0) {
             exit_code = rc;
         } else {
-            rc = render_one(&md, &arena, data, len, "<stdin>");
+            rc = render_one(md, data, len, "<stdin>");
             free(data);
             if (rc != 0) exit_code = rc;
         }
     }
 
-    mdit_md_destroy(&md);
-    mdit_arena_destroy(&lib, &arena);
+    mdit_free(md);
     return exit_code;
 }

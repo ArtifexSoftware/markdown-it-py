@@ -4,7 +4,7 @@
 #include <stdbool.h>
 
 #include "arena.h"
-#include "mdit/mdit_lib_ctx.h"
+#include "mdit/mdit.h"
 #include "str.h"
 
 #ifdef __cplusplus

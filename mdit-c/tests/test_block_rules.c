@@ -9,7 +9,7 @@
 #include "json.h"
 #include "linkifier.h"
 #include "main.h"
-#include "mdit/mdit_lib_ctx.h"
+#include "mdit/mdit.h"
 
 #include "block_oracle.h"
 

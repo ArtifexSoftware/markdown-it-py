@@ -12,7 +12,7 @@
 #include <string.h>
 
 #include "arena.h"
-#include "mdit/mdit_lib_ctx.h"
+#include "mdit/mdit.h"
 #include "json.h"
 #include "punycode.h"
 #include "str.h"
