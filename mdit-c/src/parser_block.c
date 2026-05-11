@@ -2,7 +2,7 @@
  * parser_block.c — block-level tokenizer driver + built-in rules.
  *
  * The ruler stores generic ``(state, user)`` callbacks; block rules
- * have signature ``bool(mdit_state_block *)``. We exploit C11
+ * have signature ``bool(mdit_state_block *)``. We exploit C99
  * §6.3.2.3p8: pointer-to-function may be converted to another
  * pointer-to-function and back, and a call through the original type
  * is well-defined. So we cast the typed rule fn to mdit_rule_fn at

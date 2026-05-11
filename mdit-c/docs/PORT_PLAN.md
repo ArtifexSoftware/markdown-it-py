@@ -9,7 +9,7 @@ in agent transcripts.
 | Area              | Choice                                                         |
 | ----------------- | -------------------------------------------------------------- |
 | Public surface    | C library + CLI **and** an optional CPython extension          |
-| C standard        | C11, no compiler-specific extensions in public headers         |
+| C standard        | C99, no compiler-specific extensions in public headers         |
 | String encoding   | UTF-8 in/out, codepoint helpers for classification             |
 | Regex strategy    | Hand scanners; tiny dependency-free matcher only if forced     |
 | Memory model      | Per-parse arena allocator                                      |

@@ -1,6 +1,6 @@
 # Changelog — mdit-c
 
-All notable changes to the C11 port are documented here. The project is
+All notable changes to the C99 port are documented here. The project is
 still pre–1.0; expect API adjustments until Phase 5.
 
 ## Unreleased

@@ -2,7 +2,7 @@
  * mdit_test.h — tiny header-only test harness for the C port.
  *
  * Design goals:
- *   - Zero dependencies, C11, MSVC-clean.
+ *   - Zero dependencies, C99, MSVC-clean.
  *   - One translation unit per test executable; each TU defines a list
  *     of tests and includes mdit_test_main.h at the very bottom to pick
  *     up a generated main(). That keeps fixtures local and ctest reports

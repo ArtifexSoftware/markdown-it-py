@@ -13,7 +13,7 @@
 #     Links the harness with ``-fsanitize=fuzzer,address`` so libFuzzer
 #     supplies ``main`` and AddressSanitizer catches issues.
 #
-#   * Replay smoke (any C11 compiler — the default):
+#   * Replay smoke (any C99 compiler — the default):
 #         cmake -S mdit-c -B build -DMDIT_BUILD_FUZZ=ON
 #         cmake --build build
 #         ctest --test-dir build -R fuzz_smoke

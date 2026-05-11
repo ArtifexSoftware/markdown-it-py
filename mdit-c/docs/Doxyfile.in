@@ -8,7 +8,7 @@
 # --- Project --------------------------------------------------------------
 PROJECT_NAME           = "mdit-c"
 PROJECT_NUMBER         = @MDIT_PROJECT_VERSION@
-PROJECT_BRIEF          = "C11 port of markdown-it-py"
+PROJECT_BRIEF          = "C99 port of markdown-it-py"
 OUTPUT_DIRECTORY       = @MDIT_DOXY_OUTPUT_DIR@
 
 # --- Inputs ---------------------------------------------------------------

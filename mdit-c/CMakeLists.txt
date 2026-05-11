@@ -1,14 +1,14 @@
 cmake_minimum_required(VERSION 3.20)
 project(mdit_c
     VERSION 0.0.1
-    DESCRIPTION "C11 port of markdown-it-py"
+    DESCRIPTION "C99 port of markdown-it-py"
     LANGUAGES C
 )
 
 # ---------------------------------------------------------------------------
 # Project-wide settings
 # ---------------------------------------------------------------------------
-set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)

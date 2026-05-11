@@ -31,7 +31,7 @@ ASan reports memory bugs, and UBSan catches undefined behaviour. This
 is the build mode oss-fuzz consumes via the upstream
 `projects/markdown-it-py/build.sh` recipe.
 
-### Replay smoke (any C11 compiler — the default)
+### Replay smoke (any C99 compiler — the default)
 
 ```sh
 cmake -S mdit-c -B build -DMDIT_BUILD_FUZZ=ON

@@ -1,5 +1,5 @@
 /*
- * mdit-c — C11 port of markdown-it-py.
+ * mdit-c — C99 port of markdown-it-py.
  *
  * Public API entry points. The header is intentionally small: tokens,
  * renderer hooks, and plugin/ruler types live in their own headers and

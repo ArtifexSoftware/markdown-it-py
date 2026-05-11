@@ -1,6 +1,6 @@
 # mdit-c
 
-A C11 port of [markdown-it-py](../markdown_it/) — itself a Python port of
+A C99 port of [markdown-it-py](../markdown_it/) — itself a Python port of
 [markdown-it](https://github.com/markdown-it/markdown-it).
 
 This directory holds the C implementation, a CLI, and an optional CPython
@@ -15,7 +15,7 @@ package (used as a continuous correctness oracle during the port).
 | Area              | Choice                                                         |
 | ----------------- | -------------------------------------------------------------- |
 | Public surface    | C library + CLI + optional CPython extension                   |
-| C standard        | C11, no compiler-specific extensions in public headers         |
+| C standard        | C99, no compiler-specific extensions in public headers         |
 | String encoding   | UTF-8 in/out; codepoint helpers for classification             |
 | Regex strategy    | Hand-written scanners; minimal NFA matcher only if forced      |
 | Memory model      | Per-parse arena allocator; explicit ownership at the API edge  |

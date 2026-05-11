@@ -377,7 +377,7 @@ static const mdit_block_oracle_case MDIT_BLOCK_ORACLE[] = {
     { "typo_ellipsis_many", "wait......", 10, "<p>wait\xe2\x80\xa6</p>\n", 15, MDIT_BLOCK_ORACLE_OPT_TYPOGRAPHER },
     { "typo_question_ellipsis", "really?....", 11, "<p>really?..</p>\n", 17, MDIT_BLOCK_ORACLE_OPT_TYPOGRAPHER },
     { "typo_excl_ellipsis", "wow!....", 8, "<p>wow!..</p>\n", 14, MDIT_BLOCK_ORACLE_OPT_TYPOGRAPHER },
-    /* `\?` escapes prevent GCC's `-std=c11` mode from interpreting `???<`
+    /* `\?` escapes prevent GCC's `-std=c99` mode from interpreting `???<`
        as the trigraph `?{`, which would silently mangle this fixture. */
     { "typo_question_run", "really?\?\?\?\?\?", 11, "<p>really?\?\?</p>\n", 17, MDIT_BLOCK_ORACLE_OPT_TYPOGRAPHER },
     { "typo_excl_run", "wow!!!!!!", 9, "<p>wow!!!</p>\n", 14, MDIT_BLOCK_ORACLE_OPT_TYPOGRAPHER },

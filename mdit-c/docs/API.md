@@ -1,7 +1,7 @@
-# mdit-c — C11 port of markdown-it-py
+# mdit-c — C99 port of markdown-it-py
 
 `mdit-c` is a CommonMark / GFM Markdown engine written in portable
-C11. The API is a thin, allocator-aware translation of the Python
+C99. The API is a thin, allocator-aware translation of the Python
 `markdown_it` package, designed so that the existing plugin
 ecosystem ports cleanly to C while still being usable from Python
 through the shipped CPython extension.

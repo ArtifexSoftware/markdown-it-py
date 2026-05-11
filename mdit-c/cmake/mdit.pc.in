@@ -4,7 +4,7 @@ libdir=@MDIT_PC_LIBDIR@
 includedir=@MDIT_PC_INCLUDEDIR@
 
 Name: mdit
-Description: C11 port of markdown-it-py — fast, configurable Markdown parser
+Description: C99 port of markdown-it-py — fast, configurable Markdown parser
 URL: https://github.com/executablebooks/markdown-it-py
 Version: @PROJECT_VERSION@
 Libs: -L${libdir} -lmdit
